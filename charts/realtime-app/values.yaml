@@ -53,6 +53,12 @@ observability:
     service:
       type: ClusterIP
       port: 3100
+  promtail:
+    enabled: true
+    image:
+      repository: grafana/promtail
+      tag: 2.9.8
+      pullPolicy: IfNotPresent
   grafana:
     replicas: 1
     image:
