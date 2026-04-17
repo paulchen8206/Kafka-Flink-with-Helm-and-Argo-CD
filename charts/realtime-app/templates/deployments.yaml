@@ -1,0 +1,73 @@
+{{- if .Values.producer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "realtime-app.fullname" . }}-producer
+  labels:
+    app.kubernetes.io/name: {{ include "realtime-app.name" . }}
+    app.kubernetes.io/component: producer
+spec:
+  replicas: {{ .Values.producer.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "realtime-app.name" . }}
+      app.kubernetes.io/component: producer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "realtime-app.name" . }}
+        app.kubernetes.io/component: producer
+    spec:
+      containers:
+        - name: producer
+          image: {{ .Values.producer.image.repository }}:{{ .Values.producer.image.tag }}
+          imagePullPolicy: {{ .Values.producer.image.pullPolicy }}
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ .Values.kafkaBootstrapServers | quote }}
+            - name: RAW_TOPIC
+              value: {{ .Values.producer.rawTopic | quote }}
+            - name: PRODUCER_INTERVAL_MS
+              value: {{ .Values.producer.intervalMs | quote }}
+---
+{{- end }}
+{{- if .Values.processor.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "realtime-app.fullname" . }}-processor
+  labels:
+    app.kubernetes.io/name: {{ include "realtime-app.name" . }}
+    app.kubernetes.io/component: processor
+spec:
+  replicas: {{ .Values.processor.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "realtime-app.name" . }}
+      app.kubernetes.io/component: processor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "realtime-app.name" . }}
+        app.kubernetes.io/component: processor
+    spec:
+      containers:
+        - name: processor
+          image: {{ .Values.processor.image.repository }}:{{ .Values.processor.image.tag }}
+          imagePullPolicy: {{ .Values.processor.image.pullPolicy }}
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ .Values.kafkaBootstrapServers | quote }}
+            - name: APP_RAW_SALES_ORDERS_TOPIC
+              value: {{ .Values.processor.topics.rawSalesOrders | quote }}
+            - name: APP_SALES_ORDER_TOPIC
+              value: {{ .Values.processor.topics.salesOrder | quote }}
+            - name: APP_SALES_ORDER_LINE_ITEM_TOPIC
+              value: {{ .Values.processor.topics.salesOrderLineItem | quote }}
+            - name: APP_CUSTOMER_SALES_TOPIC
+              value: {{ .Values.processor.topics.customerSales | quote }}
+            - name: APP_CONSUMER_GROUP_ID
+              value: {{ .Values.processor.consumerGroupId | quote }}
+            - name: APP_CHECKPOINT_INTERVAL_MS
+              value: {{ .Values.processor.checkpointIntervalMs | quote }}
+{{- end }}

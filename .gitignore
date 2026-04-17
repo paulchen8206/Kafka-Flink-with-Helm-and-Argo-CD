@@ -1,0 +1,8 @@
+.DS_Store
+*.log
+*.iml
+.idea/
+.vscode/
+producer/.venv/
+processor/target/
+charts/realtime-app/charts/

@@ -1,0 +1,17 @@
+kafkaBootstrapServers: realtime-dev-kafka:9092
+producer:
+  replicas: 1
+  image:
+    repository: realtime-sales-producer
+    tag: 0.1.0
+    pullPolicy: Never
+  intervalMs: 1000
+processor:
+  replicas: 1
+  image:
+    repository: realtime-sales-processor
+    tag: 0.1.0
+    pullPolicy: Never
+  consumerGroupId: realtime-flink-processor-dev
+kafka:
+  enabled: true

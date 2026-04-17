@@ -1,0 +1,54 @@
+nameOverride: ""
+fullnameOverride: ""
+producer:
+  enabled: true
+  replicas: 1
+  image:
+    repository: realtime-sales-producer
+    tag: 0.1.0
+    pullPolicy: IfNotPresent
+  intervalMs: 1500
+  rawTopic: raw_sales_orders
+processor:
+  enabled: true
+  replicas: 1
+  image:
+    repository: realtime-sales-processor
+    tag: 0.1.0
+    pullPolicy: IfNotPresent
+  topics:
+    rawSalesOrders: raw_sales_orders
+    salesOrder: sales_order
+    salesOrderLineItem: sales_order_line_item
+    customerSales: customer_sales
+  consumerGroupId: realtime-flink-processor
+  checkpointIntervalMs: 10000
+kafkaBootstrapServers: kafka:9092
+kafka:
+  enabled: false
+  listeners:
+    client:
+      protocol: PLAINTEXT
+  controller:
+    replicaCount: 1
+  broker:
+    replicaCount: 1
+  kraft:
+    enabled: true
+  provisioning:
+    enabled: true
+    numPartitions: 3
+    replicationFactor: 1
+    topics:
+    - name: raw_sales_orders
+      partitions: 3
+      replicationFactor: 1
+    - name: sales_order
+      partitions: 3
+      replicationFactor: 1
+    - name: sales_order_line_item
+      partitions: 3
+      replicationFactor: 1
+    - name: customer_sales
+      partitions: 3
+      replicationFactor: 1
