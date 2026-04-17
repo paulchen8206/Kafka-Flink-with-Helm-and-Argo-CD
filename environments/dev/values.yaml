@@ -20,7 +20,8 @@ kafka:
     repository: bitnamilegacy/kafka
     tag: 4.0.0-debian-12-r10
   provisioning:
-    enabled: false
+    enabled: true
+    waitForKafka: false
   extraConfig: |-
     default.replication.factor=1
     min.insync.replicas=1
