@@ -83,6 +83,143 @@ data:
         access: proxy
         url: http://{{ include "realtime-app.fullname" . }}-loki:3100
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "realtime-app.fullname" . }}-grafana-dashboard-provider
+  labels:
+    app.kubernetes.io/name: {{ include "realtime-app.name" . }}
+    app.kubernetes.io/component: observability
+    app.kubernetes.io/part: grafana
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: realtime-app-starter
+        orgId: 1
+        folder: Realtime App
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "realtime-app.fullname" . }}-grafana-dashboard-starter
+  labels:
+    app.kubernetes.io/name: {{ include "realtime-app.name" . }}
+    app.kubernetes.io/component: observability
+    app.kubernetes.io/part: grafana
+data:
+  realtime-starter.json: |
+    {
+      "id": null,
+      "uid": "realtime-starter",
+      "title": "Realtime App Starter",
+      "tags": ["realtime", "starter"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": {
+        "from": "now-15m",
+        "to": "now"
+      },
+      "templating": {
+        "list": []
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Targets Up",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "targets": [
+            {
+              "expr": "sum by (job) (up)",
+              "legendFormat": "job",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 2,
+          "title": "Prometheus Scrape Samples",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "targets": [
+            {
+              "expr": "rate(scrape_samples_scraped[5m])",
+              "legendFormat": "job",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 3,
+          "title": "Loki Log Volume (5m)",
+          "type": "timeseries",
+          "datasource": "Loki",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 8
+          },
+          "targets": [
+            {
+              "expr": "sum(count_over_time({job=~\".*\"}[5m]))",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          }
+        }
+      ]
+    }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -208,10 +345,22 @@ spec:
             - name: datasources
               mountPath: /etc/grafana/provisioning/datasources/datasources.yaml
               subPath: datasources.yaml
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml
+              subPath: dashboards.yaml
+            - name: dashboard-starter
+              mountPath: /var/lib/grafana/dashboards/realtime-starter.json
+              subPath: realtime-starter.json
       volumes:
         - name: datasources
           configMap:
             name: {{ include "realtime-app.fullname" . }}-grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: {{ include "realtime-app.fullname" . }}-grafana-dashboard-provider
+        - name: dashboard-starter
+          configMap:
+            name: {{ include "realtime-app.fullname" . }}-grafana-dashboard-starter
 ---
 apiVersion: v1
 kind: Service
