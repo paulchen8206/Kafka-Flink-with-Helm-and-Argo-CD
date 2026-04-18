@@ -27,6 +27,11 @@ This repository runs locally on Postgres + MinIO by default, but the same archit
 - Google BigQuery
 - Databricks
 
+MinIO migration note:
+
+- MinIO is used as a local S3-compatible object store.
+- Cloud counterparts are Amazon S3 (AWS), Google Cloud Storage (GCP), and Azure Data Lake Storage Gen2 (Azure).
+
 Portability guidance:
 
 - Keep Kafka topic contracts and medallion model intent unchanged.
@@ -42,6 +47,12 @@ Portability guidance:
 | Snowflake | Use Snowflake Kafka Connector | `dbt-snowflake` | Account/role/warehouse/database/schema and auth method |
 | BigQuery | Use BigQuery Sink connector | `dbt-bigquery` | Project/dataset/location and service account auth |
 | Databricks | Use Delta sink pattern for Databricks tables | `dbt-databricks` | SQL warehouse host/http_path/token and catalog/schema |
+
+Object storage counterpart by cloud:
+
+- AWS: Amazon S3
+- GCP: Google Cloud Storage
+- Azure: Azure Data Lake Storage Gen2
 
 For full migration detail and workflow, see [docs/architecture.md](docs/architecture.md).
 

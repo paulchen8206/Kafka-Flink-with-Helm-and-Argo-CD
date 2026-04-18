@@ -54,6 +54,11 @@ Out of scope for this demo:
 | GitOps delivery | Argo CD | Continuous reconciliation from Git to cluster |
 | Programming languages | Java + Python | Java for stream processor, Python for producers/integration/sync services |
 
+MinIO portability note:
+
+- MinIO is the local S3-compatible object storage layer in this project.
+- For cloud migration, replace MinIO with Amazon S3 (AWS), Google Cloud Storage (GCP), or Azure Data Lake Storage Gen2 (Azure).
+
 ### 3.1 Concrete Migration Matrix (Connectors + dbt + Config)
 
 The table below shows concrete deltas required to migrate from the default local setup (Postgres + MinIO) to each target platform.
@@ -336,6 +341,10 @@ Modeling benefits:
 ### 8.3 Cloud Kubernetes Migration Candidates
 
 The local Kubernetes model (kind + Helm + Argo CD) is designed to migrate cleanly to managed Kubernetes on major clouds.
+
+Object storage mapping principle:
+
+- Keep Iceberg table layout and medallion semantics unchanged, and swap only the object storage endpoint and credentials per cloud.
 
 | Cloud | Kubernetes target | Recommended migration candidates | Notes |
 | --- | --- | --- | --- |
