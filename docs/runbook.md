@@ -31,7 +31,9 @@ Use only one routine at a time for a clean workflow.
 | Docker Compose | Start Airflow | `make airflow-up` |
 | Docker Compose | Trigger scheduled dbt DAG | `make airflow-trigger-dbt-dag` |
 | Docker Compose | Full clean reset | `docker compose down -v && docker compose up -d --build` |
-| kind + Helm + Argo CD | Bootstrap local cluster | `./scripts/bootstrap-kind.sh && ./scripts/build-images.sh && kubectl apply -f argocd/dev.yaml` |
+| kind + Helm + Argo CD | Bootstrap local cluster (Docker-like one command) | `make routine-b` |
+| kind + Helm + Argo CD | Stop local cluster workloads | `make routine-b-down` |
+| kind + Helm + Argo CD | Bootstrap local cluster via Argo CD app | `make routine-b-argocd` |
 | kind + Helm + Argo CD | Check app + workloads | `kubectl -n argocd get application realtime-dev && kubectl -n realtime-dev get pods` |
 | kind + Helm + Argo CD | Reboot from local Helm | `make helm-reboot-dev` |
 | kind + Helm + Argo CD | Helm health snapshot | `make helm-health-dev` |
@@ -260,10 +262,30 @@ kubectl -n argocd get pods
 ./scripts/build-images.sh
 ```
 
+Docker-equivalent one-command Helm bootstrap:
+
+```bash
+make routine-b
+```
+
+Docker-equivalent one-command Helm stop:
+
+```bash
+make routine-b-down
+```
+
+This mirrors the Docker `make routine-a` experience by performing cluster bootstrap, image build/load, and Helm deploy in one flow.
+
 ### B3. Deploy application through Argo CD
 
 ```bash
 kubectl apply -f argocd/dev.yaml
+```
+
+If you prefer the direct Helm path instead of Argo CD reconciliation:
+
+```bash
+make helm-reboot-dev
 ```
 
 Confirm app appears and is healthy:
@@ -346,6 +368,13 @@ Full namespace reset:
 kubectl -n argocd delete application realtime-dev
 kubectl delete namespace realtime-dev
 kubectl apply -f argocd/dev.yaml
+```
+
+Docker-equivalent reset for Helm path:
+
+```bash
+kubectl delete namespace realtime-dev --ignore-not-found
+make routine-b
 ```
 
 ### B7. Helm Lakehouse and Airflow health checks

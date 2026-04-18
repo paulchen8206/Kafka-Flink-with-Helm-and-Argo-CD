@@ -141,6 +141,24 @@ Expected container behavior:
 
 Use this flow to run the dev environment on kind while building images locally with Docker.
 
+Docker-equivalent one-command Helm bootstrap:
+
+```bash
+make routine-b
+```
+
+Argo CD app bootstrap alternative:
+
+```bash
+make routine-b-argocd
+```
+
+Docker-equivalent one-command Helm stop:
+
+```bash
+make routine-b-down
+```
+
 1. Create a kind cluster and install Argo CD:
 
    ```bash
@@ -153,7 +171,7 @@ Use this flow to run the dev environment on kind while building images locally w
    ./scripts/build-images.sh
    ```
 
-3. Apply the Argo CD dev application:
+3. Apply the Argo CD dev application (if using Argo CD path):
 
    ```bash
    kubectl apply -f argocd/dev.yaml

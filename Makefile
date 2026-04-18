@@ -16,7 +16,7 @@ MESSAGE_COUNT   ?= 5
 	routine-a up down topics-create topics-list topics-check consume \
 	lakehouse-up lakehouse-down airflow-up airflow-logs airflow-trigger-dbt-dag \
 	dbt-run verify-warehouse verify-dbt-relations \
-        routine-b docker-build kind-load images kind-bootstrap argocd-apply \
+		routine-b routine-b-down routine-b-argocd docker-build kind-load images kind-bootstrap argocd-apply \
           helm-deps helm-lint helm-render-dev helm-render-qa helm-render-prd helm-render \
 	  helm-reboot-dev helm-health-dev
 
@@ -84,7 +84,13 @@ verify-dbt-relations: ## [A]  List dbt-created relations in bronze, silver, and 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Routine B – kind + Helm + Argo CD  (GitOps local cluster loop)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-routine-b: kind-bootstrap images argocd-apply ## [B]  Full Routine B bootstrap: cluster + images + ArgoCD app
+routine-b: kind-bootstrap images helm-reboot-dev ## [B]  Full Routine B bootstrap: cluster + images + local Helm deploy (Docker-like flow)
+
+routine-b-down: ## [B]  Stop Routine B workloads (remove Argo CD app and Helm release)
+	kubectl -n argocd delete application realtime-dev --ignore-not-found=true || true
+	helm uninstall realtime-dev -n realtime-dev || true
+
+routine-b-argocd: kind-bootstrap images argocd-apply ## [B]  Full Routine B bootstrap: cluster + images + ArgoCD app
 
 docker-build: ## [B]  Build producer + processor Docker images
 	docker build -t "$(PRODUCER_IMAGE)"  ./producer
