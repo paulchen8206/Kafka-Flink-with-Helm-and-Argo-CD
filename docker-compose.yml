@@ -106,6 +106,37 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./analytics/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
 
+  mysql-mdm:
+    image: mysql:8.4
+    command:
+      - --server-id=223344
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: mdmroot
+      MYSQL_DATABASE: mdm
+    volumes:
+      - mysql-mdm-data:/var/lib/mysql
+      - ./mdm/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  mdm-writer:
+    build:
+      context: ./mdm-writer
+    depends_on:
+      mysql-mdm:
+        condition: service_started
+    environment:
+      MDM_MYSQL_HOST: mysql-mdm
+      MDM_MYSQL_PORT: 3306
+      MDM_MYSQL_USER: root
+      MDM_MYSQL_PASSWORD: mdmroot
+      MDM_MYSQL_DB: mdm
+      MDM_WRITE_INTERVAL_MS: 3000
+    restart: on-failure
+
   connect:
     build:
       context: ./connect
@@ -145,6 +176,80 @@ services:
     volumes:
       - ./scripts/register-connectors.sh:/scripts/register-connectors.sh:ro
       - ./connect/connector-configs:/connector-configs:ro
+
+  mdm-connect:
+    image: quay.io/debezium/connect:3.0
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      mysql-mdm:
+        condition: service_started
+    ports:
+      - "8085:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: mdm-connect-cluster
+      CONFIG_STORAGE_TOPIC: mdm-connect-configs
+      OFFSET_STORAGE_TOPIC: mdm-connect-offsets
+      STATUS_STORAGE_TOPIC: mdm-connect-status
+      KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+  mdm-connect-init:
+    image: curlimages/curl:8.12.1
+    depends_on:
+      mdm-connect:
+        condition: service_started
+    entrypoint: ["/bin/sh", "/scripts/register-mdm-connectors.sh"]
+    volumes:
+      - ./scripts/register-mdm-connectors.sh:/scripts/register-mdm-connectors.sh:ro
+      - ./connect/connector-configs:/connector-configs:ro
+
+  mdm-cdc-producer:
+    build:
+      context: ./mdm-cdc-producer
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      mdm-connect-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MDM_CDC_GROUP_ID: mdm-cdc-publisher
+      CDC_CONSUMER_OFFSET_RESET: earliest
+    restart: on-failure
+
+  mdm-pyspark-sync:
+    build:
+      context: ./mdm-pyspark-sync
+    depends_on:
+      mysql-mdm:
+        condition: service_started
+      postgres:
+        condition: service_started
+      mdm-writer:
+        condition: service_started
+    environment:
+      MDM_MYSQL_HOST: mysql-mdm
+      MDM_MYSQL_PORT: 3306
+      MDM_MYSQL_DB: mdm
+      MDM_MYSQL_USER: root
+      MDM_MYSQL_PASSWORD: mdmroot
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: analytics
+      POSTGRES_USER: analytics
+      POSTGRES_PASSWORD: analytics
+      MDM_SYNC_INTERVAL_SEC: 15
+    command:
+      - /opt/spark/bin/spark-submit
+      - --conf
+      - spark.jars.ivy=/tmp/.ivy
+      - --packages
+      - org.postgresql:postgresql:42.7.4,com.mysql:mysql-connector-j:8.4.0
+      - /app/main.py
+    restart: on-failure
 
   dbt:
     build:
@@ -191,3 +296,4 @@ volumes:
   airflow-data:
   minio-data:
   postgres-data:
+  mysql-mdm-data:

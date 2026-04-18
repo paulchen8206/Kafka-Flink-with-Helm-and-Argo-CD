@@ -14,6 +14,7 @@ Use only one routine at a time for a clean workflow.
 | Argo CD UI | N/A | https://localhost:8443 (after `kubectl -n argocd port-forward svc/argocd-server 8443:443`) | admin | `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 --decode; echo` |
 | MinIO Console | http://localhost:9001 | http://localhost:9001 (after `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-minio 9001:9001`) | minio | minio123 |
 | Postgres | 127.0.0.1:5432 / db `analytics` | 127.0.0.1:5433 / db `analytics` (after `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-postgres 5433:5432`) | analytics | analytics |
+| MySQL MDM | 127.0.0.1:3306 / db `mdm` | N/A | root | mdmroot |
 | Airflow UI | http://localhost:8084 | http://localhost:8084 (after `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-airflow 8084:8080`) | admin | admin |
 
 ## Operator Cheat Sheet
@@ -24,6 +25,7 @@ Use only one routine at a time for a clean workflow.
 | Docker Compose | Fast health check | `docker compose ps && ./scripts/check-pipeline-topics.sh` |
 | Docker Compose | Tail app logs | `docker compose logs --no-color --since=10m producer processor | tail -n 200` |
 | Docker Compose | Rebuild processor only + validate | `docker compose up -d --build processor && docker compose logs --no-color --since=2m processor | tail -n 120 && ./scripts/consume-topic.sh sales_order 1 && ./scripts/consume-topic.sh sales_order_line_item 1 && ./scripts/consume-topic.sh customer_sales 1` |
+| Docker Compose | Validate MDM topic flow | `./scripts/consume-topic.sh mdm_customer 1 && ./scripts/consume-topic.sh mdm_product 1` |
 | Docker Compose | Verify warehouse counts | `make verify-warehouse` |
 | Docker Compose | Re-run dbt models | `make dbt-run` |
 | Docker Compose | Start Airflow | `make airflow-up` |
@@ -68,6 +70,8 @@ Expected local endpoints:
 - Kafka broker: localhost:9094
 - Kafka UI: http://localhost:8080
 - Airflow UI: http://localhost:8084
+- Debezium Connect REST (MDM): http://localhost:8085
+- MySQL MDM: localhost:3306
 
 ### A2. Validate containers
 
@@ -82,12 +86,18 @@ All services should be Up, especially:
 - producer
 - processor
 - kafka-ui
+- mysql-mdm
+- mdm-writer
+- mdm-connect
+- mdm-cdc-producer
+- mdm-pyspark-sync
 
 Expected completed containers:
 
 - `topic-init` exits with code 0 after creating topics.
 - `minio-init` exits with code 0 after creating the object store bucket.
 - `connect-init` exits with code 0 after registering connectors.
+- `mdm-connect-init` exits with code 0 after registering the Debezium MySQL source connector.
 - `dbt` exits with code 0 after `dbt run` completes.
 
 Those `Exited (0)` states are normal and should not be treated as failures.
@@ -100,6 +110,8 @@ Those `Exited (0)` states are normal and should not be treated as failures.
 ./scripts/consume-topic.sh sales_order 1
 ./scripts/consume-topic.sh sales_order_line_item 1
 ./scripts/consume-topic.sh customer_sales 1
+./scripts/consume-topic.sh mdm_customer 1
+./scripts/consume-topic.sh mdm_product 1
 ```
 
 Quick full check:
@@ -130,9 +142,10 @@ make verify-dbt-relations
 
 Interpretation:
 
-- `public_stage.*` objects are dbt stage views.
-- `public_gold.gold_customer_sales_summary` is a dbt table.
-- If landing has rows and stage does not, rerun dbt before debugging upstream services.
+- `bronze.*` objects are dbt staging-aligned views.
+- `silver.*` objects are dbt dimension and fact tables.
+- `gold.gold_customer_sales_summary` is the presentation table.
+- If landing has rows and bronze/silver/gold does not, rerun dbt before debugging upstream services.
 
 ### A4. Observe logs
 
@@ -150,6 +163,18 @@ Kafka Connect logs:
 
 ```bash
 docker compose logs --tail=200 connect
+```
+
+MDM Debezium Connect logs:
+
+```bash
+docker compose logs --tail=200 mdm-connect
+```
+
+MDM writer + CDC publisher logs:
+
+```bash
+docker compose logs --tail=200 mdm-writer mdm-cdc-producer mdm-pyspark-sync
 ```
 
 Manual dbt rerun:
@@ -180,7 +205,7 @@ Stop and remove volumes:
 docker compose down -v
 ```
 
-If you use the volume reset, Postgres landing, stage, and gold data will be recreated from scratch on the next startup.
+If you use the volume reset, Postgres landing, bronze, silver, and gold data will be recreated from scratch on the next startup.
 
 ## Compose Service Roles
 
@@ -188,18 +213,28 @@ If you use the volume reset, Postgres landing, stage, and gold data will be recr
 - `processor` runs the Spring Boot application with the embedded Flink topology.
 - `connect` loads Kafka Connect sink plugins and exposes the REST API on port 8083.
 - `connect-init` registers the JDBC and object-storage sink connectors from `connect/connector-configs`.
-- `postgres` stores `landing`, `public_stage`, and `public_gold` schemas for analytics queries.
-- `dbt` transforms landing data into stage views and gold tables.
+- `mysql-mdm` stores `mdm.customer360`, `mdm.product_master`, and `mdm_date` source tables.
+- `mdm-writer` upserts customer and product master rows into MySQL.
+- `mdm-connect` runs Debezium MySQL source capture and publishes raw CDC topics.
+- `mdm-connect-init` registers the Debezium connector from `connect/connector-configs/debezium-mysql-mdm.json`.
+- `mdm-cdc-producer` republishes curated `mdm_customer` and `mdm_product` topics.
+- `mdm-pyspark-sync` syncs MySQL MDM tables into Postgres landing MDM tables.
+- `postgres` stores `landing`, `bronze`, `silver`, and `gold` schemas for analytics queries.
+- `dbt` transforms landing data into bronze views, silver tables, and gold tables.
 - `airflow` schedules and triggers recurring dbt runs for the warehouse layer.
 
 ## Common Failure Patterns
 
-- No stage rows with landing rows present:
-  Run `make dbt-run`, then recheck `public_stage` counts.
+- No bronze rows with landing rows present:
+  Run `make dbt-run`, then recheck `bronze` counts.
 - `dbt` shows `Exited (0)` in `docker compose ps -a`:
   This is expected for the one-shot dbt service after a successful run.
 - Kafka Connect is healthy but landing rows stay at zero:
   Check `docker compose logs --tail=200 connect` and confirm `connect-init` completed successfully.
+- MySQL has rows but MDM landing tables stay at zero:
+  Check `docker compose logs --tail=200 mdm-pyspark-sync` and verify Postgres connectivity.
+- Debezium MDM connector is not producing raw CDC topics:
+  Check `docker compose logs --tail=200 mdm-connect` and ensure `mdm-connect-init` completed successfully.
 - Full stack startup feels blocked around dbt:
   Compose may still be waiting for `connect-init` or `postgres` before launching the dbt container.
 - Airflow UI starts but no dbt runs appear:

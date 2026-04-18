@@ -13,6 +13,15 @@ flowchart LR
       FL[Processor\nSpring Boot + Flink]
    end
 
+  subgraph MDM[MDM and CDC]
+    direction TB
+    MW[MDM Writer\nMySQL upserts]
+    MY[(MySQL MDM)]
+    MDC[Debezium Connect]
+    MCP[MDM CDC Publisher]
+    MSP[MDM PySpark Sync]
+  end
+
    subgraph Serving[Serving and Consumption]
       direction TB
       KUI[Kafka UI]
@@ -35,11 +44,20 @@ flowchart LR
    FL -->|sales_order_line_item| K
    FL -->|customer_sales| K
 
+  MW --> MY
+  MY -->|binlog CDC| MDC
+  MDC -->|mdm_mysql.mdm.customer360| K
+  MDC -->|mdm_mysql.mdm.product_master| K
+  K -->|consume raw MDM CDC| MCP
+  MCP -->|mdm_customer| K
+  MCP -->|mdm_product| K
+  MSP -->|sync tables| PG
+
    K --> KUI
    K --> KC
    KC -->|Iceberg tables| MINIO
    KC -->|landing schema| PG
-   DBT -->|stage and gold| PG
+  DBT -->|bronze, silver, gold| PG
    AF -->|scheduled dbt runs| DBT
 
    ARGO -->|GitOps deploy| Ingestion
@@ -60,11 +78,17 @@ flowchart TB
       C4[kafka-ui]
       C5[connect]
       C6[connect-init Job]
-      C7[minio]
-      C8[minio-init Job]
-      C9[postgres]
-      C10[dbt one-shot Job]
-      C11[airflow]
+    C7[mysql-mdm]
+    C8[mdm-writer]
+    C9[mdm-connect]
+    C10[mdm-connect-init Job]
+    C11[mdm-cdc-producer]
+    C12[mdm-pyspark-sync]
+    C13[minio]
+    C14[minio-init Job]
+    C15[postgres]
+    C16[dbt one-shot Job]
+    C17[airflow]
    end
 
    subgraph KindHelm[Routine B: kind + Helm + Argo CD]
@@ -110,6 +134,15 @@ flowchart LR
    P --> T2[(sales_order_line_item)]
    P --> T3[(customer_sales)]
 
+  MW[MDM Writer] --> MY[(MySQL mdm.customer360 and mdm.product_master)]
+  MY --> MDC[Debezium MySQL Source]
+  MDC --> T4[(mdm_mysql.mdm.customer360)]
+  MDC --> T5[(mdm_mysql.mdm.product_master)]
+  T4 --> MCP[MDM CDC Publisher]
+  T5 --> MCP
+  MCP --> T6[(mdm_customer)]
+  MCP --> T7[(mdm_product)]
+
    T1 --> KC[Kafka Connect]
    T2 --> KC
    T3 --> KC
@@ -118,13 +151,21 @@ flowchart LR
    KC --> L2[(Postgres landing.sales_order_line_item)]
    KC --> L3[(Postgres landing.customer_sales)]
    KC --> I[(Iceberg on MinIO)]
+  MS[MDM PySpark Sync] --> L4[(Postgres landing.mdm_customer360)]
+  MS --> L5[(Postgres landing.mdm_product_master)]
+  MS --> L6[(Postgres landing.mdm_date)]
+  MY --> MS
 
    L1 --> D[dbt]
    L2 --> D
    L3 --> D
+  L4 --> D
+  L5 --> D
+  L6 --> D
 
-   D --> S1[(public_stage.* views)]
-   D --> G1[(public_gold.gold_customer_sales_summary)]
+  D --> B1[(bronze.* views)]
+  D --> S1[(silver.* tables)]
+  D --> G1[(gold.gold_customer_sales_summary)]
    AF[Airflow schedule] --> D
 ```
 
@@ -140,8 +181,12 @@ This implementation follows a modern data platform pattern adapted for local dev
   Flink performs real-time decomposition and enrichment into analytics-ready topics.
 - Lakehouse ingestion layer:
   Kafka Connect persists streams into both object storage (Iceberg on MinIO) and relational landing (Postgres).
+- Master data and CDC layer:
+  MySQL stores customer and product master entities, Debezium captures row changes, and a CDC publisher creates curated MDM Kafka topics.
+- MDM landing sync layer:
+  PySpark continuously synchronizes MySQL MDM tables into Postgres landing tables consumed by dbt.
 - Transformation layer:
-  dbt applies SQL-first modeling from landing to stage and gold.
+  dbt applies SQL-first modeling from landing to bronze, silver, and gold.
 - Orchestration layer:
   Airflow schedules recurring dbt execution.
 - Observability and operations layer:
@@ -155,8 +200,10 @@ This implementation follows a modern data platform pattern adapted for local dev
   One raw topic fans into domain-focused topics for bounded consumers.
 - Dual-sink ingestion pattern:
   Same stream is persisted to both object storage and warehouse landing.
+- CDC republish pattern:
+  Raw Debezium CDC topics are normalized and republished to curated MDM topics.
 - Medallion-style modeling:
-  Landing (bronze-like) -> stage (silver-like) -> gold presentation.
+  Landing -> bronze -> silver -> gold presentation.
 - Idempotent bootstrap jobs:
   Connector registration, MinIO bucket creation, and dbt bootstrap run as one-shot jobs.
 - GitOps deployment pattern:

@@ -72,14 +72,14 @@ airflow-logs: ## [A]  Tail Apache Airflow logs
 airflow-trigger-dbt-dag: ## [A]  Trigger the scheduled dbt Airflow DAG manually
 	docker compose exec -T airflow airflow dags trigger dbt_warehouse_schedule
 
-dbt-run: ## [A]  Run dbt stage and gold models on Postgres
+dbt-run: ## [A]  Run dbt bronze, silver, and gold models on Postgres
 	docker compose run --rm dbt
 
-verify-warehouse: ## [A]  Show landing, stage, and gold row counts in Postgres
-	docker compose exec -T postgres psql -U analytics -d analytics -c "select count(*) as landing_sales_order from landing.sales_order; select count(*) as landing_sales_order_line_item from landing.sales_order_line_item; select count(*) as landing_customer_sales from landing.customer_sales; select count(*) as stage_sales_order from public_stage.stg_sales_order; select count(*) as stage_sales_order_line_item from public_stage.stg_sales_order_line_item; select count(*) as stage_customer_sales from public_stage.stg_customer_sales; select count(*) as gold_customer_sales_summary from public_gold.gold_customer_sales_summary;"
+verify-warehouse: ## [A]  Show landing, bronze, silver, and gold row counts in Postgres
+	docker compose exec -T postgres psql -U analytics -d analytics -c "select count(*) as landing_sales_order from landing.sales_order; select count(*) as landing_sales_order_line_item from landing.sales_order_line_item; select count(*) as landing_customer_sales from landing.customer_sales; select count(*) as bronze_sales_order from bronze.stg_sales_order; select count(*) as bronze_sales_order_line_item from bronze.stg_sales_order_line_item; select count(*) as bronze_customer_sales from bronze.stg_customer_sales; select count(*) as silver_fact_sales_order from silver.fact_sales_order; select count(*) as gold_customer_sales_summary from gold.gold_customer_sales_summary;"
 
-verify-dbt-relations: ## [A]  List dbt-created relations in public_stage and public_gold
-	docker compose exec -T postgres psql -U analytics -d analytics -c "select table_schema, table_name, table_type from information_schema.tables where table_schema in ('public_stage', 'public_gold') order by table_schema, table_name;"
+verify-dbt-relations: ## [A]  List dbt-created relations in bronze, silver, and gold
+	docker compose exec -T postgres psql -U analytics -d analytics -c "select table_schema, table_name, table_type from information_schema.tables where table_schema in ('bronze', 'silver', 'gold') order by table_schema, table_name;"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Routine B – kind + Helm + Argo CD  (GitOps local cluster loop)

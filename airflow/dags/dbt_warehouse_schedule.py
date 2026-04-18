@@ -14,7 +14,7 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=1)},
-    tags=["dbt", "warehouse"],
+    tags=["dbt", "warehouse", "mdm"],
 ) as dag:
     run_dbt = BashOperator(
         task_id="run_dbt",
@@ -25,4 +25,14 @@ with DAG(
         ),
     )
 
-    run_dbt
+    run_dbt_mdm = BashOperator(
+        task_id="run_dbt_mdm",
+        bash_command=(
+            "cd /opt/airflow/dbt && "
+            "dbt run --project-dir /opt/airflow/dbt --profiles-dir /opt/airflow/dbt "
+            "--select stg_mdm_customer360 stg_mdm_product_master stg_mdm_date "
+            "dim_mdm_customer dim_mdm_product dim_mdm_date"
+        ),
+    )
+
+    run_dbt_mdm >> run_dbt

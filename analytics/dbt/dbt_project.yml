@@ -8,8 +8,11 @@ clean-targets: ["target", "dbt_packages"]
 models:
   realtime_analytics:
     +materialized: view
-    staging:
-      +schema: stage
+    bronze:
+      +schema: bronze
+    silver:
+      +schema: silver
+      +materialized: table
     gold:
       +schema: gold
       +materialized: table

@@ -11,7 +11,9 @@ The pipeline shape is:
 - The Java Spring Boot app starts a Flink DataStream job.
 - Flink splits and transforms records into `sales_order`, `sales_order_line_item`, and `customer_sales`.
 - Kafka Connect sinks processed topics into Iceberg tables on MinIO and mirrors topic data into Postgres landing tables.
-- dbt builds `stage` and `gold` models in Postgres as a Snowflake-like analytics layer.
+- A MySQL-backed MDM service stores `customer360` and `product_master` records.
+- Debezium captures MySQL CDC events, and a Python CDC publisher emits curated `mdm_customer` and `mdm_product` Kafka topics.
+- dbt builds `bronze`, `silver`, and `gold` models in Postgres as a medallion-style analytics layer.
 - Optional observability services in Kubernetes provide Prometheus, Loki, and Grafana.
 
 ## Docs Index
@@ -23,8 +25,10 @@ The pipeline shape is:
 
 - Producer emits composite sales events to `raw_sales_orders`.
 - Processor (Spring Boot + Flink) consumes raw events and fans out to `sales_order`, `sales_order_line_item`, and `customer_sales`.
+- MDM writer upserts customer and product master records into MySQL.
+- Debezium captures MySQL changes and the CDC publisher forwards them to `mdm_customer` and `mdm_product`.
 - Kafka Connect sinks processed streams to Iceberg on MinIO and Postgres landing tables.
-- dbt models transform landing into stage and gold warehouse layers.
+- dbt models transform landing into bronze, silver, and gold warehouse layers.
 - Airflow schedules recurring dbt runs.
 - Argo CD reconciles Helm-based Kubernetes deployments; Grafana/Loki/Prometheus provide observability.
 
@@ -45,13 +49,17 @@ Use the architecture design doc for the canonical system architecture, deploymen
 ## Repository Layout
 
 - `producer`: Python Kafka producer for composite sales orders.
+- `mdm-writer`: Python app that inserts and updates MySQL MDM master data.
+- `mdm-cdc-producer`: Python app that consumes Debezium CDC topics and publishes `mdm_customer` and `mdm_product`.
+- `mdm-pyspark-sync`: PySpark app that continuously syncs MySQL MDM tables into Postgres landing tables.
 - `processor`: Spring Boot application that launches the Flink topology.
 - `charts/realtime-app`: Helm chart for producer, processor, Kafka UI, MinIO, Postgres, Kafka Connect, dbt bootstrap, Airflow, and optional Kafka.
 - `environments`: Helm values for `dev`, `qa`, and `prd`.
 - `argocd`: Argo CD Application manifests.
 - `connect`: Kafka Connect image and connector configurations (Iceberg + JDBC sinks).
-- `analytics/dbt`: dbt project for stage and gold models in Postgres.
-- `analytics/sql`: Database bootstrap SQL (landing, stage, gold schemas).
+- `analytics/dbt`: dbt project for bronze, silver, and gold models in Postgres.
+- `analytics/sql`: Database bootstrap SQL (landing plus MDM landing tables in Postgres).
+- `mdm/sql`: MySQL bootstrap SQL for MDM `customer360` and `product_master` tables.
 - `airflow`: Apache Airflow image and DAGs for scheduled dbt orchestration.
 - `scripts`: Local bootstrap and image build helpers.
 - `docs/runbook.md`: Day-2 operations procedures for Compose and Argo CD workflows.
@@ -79,6 +87,8 @@ Once the stack is running:
 - Kafka UI is exposed on `http://localhost:8080`
 - The producer writes composite order events into `raw_sales_orders`
 - The processor fans out records into `sales_order`, `sales_order_line_item`, and `customer_sales`
+- The MDM writer upserts master data into MySQL `mdm.customer360` and `mdm.product_master`
+- Debezium plus CDC publisher emits `mdm_customer` and `mdm_product`
 
 Inspect the Kafka topics from the running local stack:
 
@@ -100,7 +110,7 @@ Start Airflow only:
 make airflow-up
 ```
 
-Run dbt transforms (`landing` -> `stage` -> `gold`) in Postgres:
+Run dbt transforms (`landing` -> `bronze` -> `silver` -> `gold`) in Postgres:
 
 ```bash
 make dbt-run
@@ -111,8 +121,10 @@ Local endpoints for this layer:
 - MinIO API: `http://localhost:9000`
 - MinIO Console: `http://localhost:9001`
 - Kafka Connect REST: `http://localhost:8083`
+- Debezium Connect REST (MDM): `http://localhost:8085`
 - Airflow UI: `http://localhost:8084`
 - Postgres: `localhost:5432` (user/password/db: `analytics`)
+- MySQL MDM: `localhost:3306` (root password: `mdmroot`, db: `mdm`)
 
 Local Airflow credentials:
 
@@ -123,7 +135,7 @@ Expected container behavior:
 
 - `topic-init`, `minio-init`, and `connect-init` are one-shot init containers and normally end in `Exited (0)`.
 - `dbt` is also a one-shot service and normally ends in `Exited (0)` after `dbt run` completes.
-- A finished `dbt` container does not mean stage or gold data is missing.
+- A finished `dbt` container does not mean bronze, silver, or gold data is missing.
 
 ## Quick Start: kind + Helm + Argo CD
 
@@ -240,15 +252,29 @@ Dev environment behavior:
    - JDBC sink connector for the same topics into Postgres `landing` schema.
 - Connector registration happens automatically in `connect-init` in Compose and via a Kubernetes Job in the Helm release.
 
+### MDM CDC Layer
+
+- `mysql-mdm` stores MDM entities:
+   - `mdm.customer360` aligned to customer dimension semantics.
+   - `mdm.product_master` aligned to product dimension semantics.
+- `mdm-writer` continuously inserts and updates those master records.
+- `mdm-connect` runs Debezium MySQL source connector (`debezium-mysql-mdm`).
+- Debezium raw CDC topics:
+   - `mdm_mysql.mdm.customer360`
+   - `mdm_mysql.mdm.product_master`
+- `mdm-cdc-producer` consumes raw CDC and republishes curated MDM topics:
+   - `mdm_customer`
+   - `mdm_product`
+- `mdm-pyspark-sync` periodically reads MySQL MDM source tables and writes them into Postgres `landing.mdm_customer360`, `landing.mdm_product_master`, and `landing.mdm_date`.
+
 ### dbt and Warehouse Layer
 
 - dbt project location: `analytics/dbt`
 - Source schema: `landing`
-- dbt target schema: `public`
-- Stage schema suffix: `stage`, which resolves to physical schema `public_stage`
-- Gold schema suffix: `gold`, which resolves to physical schema `public_gold`
-- Stage models are materialized as views
-- Gold models are materialized as tables
+- Bronze schema: `bronze` (views)
+- Silver schema: `silver` (tables)
+- Gold schema: `gold` (tables)
+- `analytics/dbt/macros/generate_schema_name.sql` disables dbt's default `target_schema + custom_schema` concatenation, so models materialize directly in `bronze`, `silver`, and `gold`.
 - Main gold model: `gold_customer_sales_summary`
 
 ### Airflow Scheduling Layer
@@ -269,7 +295,7 @@ Verify Kafka topic fan-out:
 ./scripts/check-pipeline-topics.sh
 ```
 
-Verify landing, stage, and gold row counts in Postgres:
+Verify landing, bronze, silver, and gold row counts in Postgres:
 
 ```bash
 make verify-warehouse
