@@ -293,6 +293,7 @@ Dev environment behavior:
 - Silver schema: `silver` (tables)
 - Gold schema: `gold` (tables)
 - `analytics/dbt/macros/generate_schema_name.sql` disables dbt's default `target_schema + custom_schema` concatenation, so models materialize directly in `bronze`, `silver`, and `gold`.
+- In the Helm path, the same macro must be mounted into the dbt runtime (`/dbt/macros/generate_schema_name.sql`) from the warehouse ConfigMap; otherwise dbt may recreate `public_bronze`, `public_silver`, and `public_gold`.
 - Main gold model: `gold_customer_sales_summary`
 
 ### Airflow Scheduling Layer
@@ -338,6 +339,30 @@ make airflow-trigger-dbt-dag
 ```
 
 `make dbt-run` uses `docker compose run --rm dbt`, so Compose may briefly wait on dependencies before the dbt command starts.
+
+## Validation Snapshot (2026-04-18)
+
+The following checks were run against this workspace and local cluster state.
+
+Static validation:
+
+- `docker compose config` rendered successfully.
+- `helm dependency build charts/realtime-app` completed successfully.
+- `helm template realtime-dev charts/realtime-app -f environments/dev/values.yaml` rendered successfully.
+
+Runtime validation (Routine B cluster):
+
+- Argo CD app status: `realtime-dev` reported `HEALTH=Healthy`, `SYNC=OutOfSync`.
+- Core platform pods were `Running` and one-shot bootstrap Jobs were `Completed`.
+- dbt Job completed with `PASS=11 WARN=0 ERROR=0`.
+- Postgres canonical warehouse schemas were present: `landing`, `bronze`, `silver`, `gold`.
+- `public_gold` was also observed in runtime due app drift; clean up and Argo sync are required to keep schema naming deterministic.
+
+Important GitOps note:
+
+- If Argo CD owns the release, local `make helm-reboot-dev` may fail with ownership/immutable-field conflicts.
+- In that case, commit chart changes and sync via Argo CD (`kubectl apply -f argocd/dev.yaml` then app sync/refresh) so runtime config matches Git.
+- A one-time cleanup may be needed to remove already-created `public_*` schemas; see the runbook troubleshooting section.
 
 ## Build Commands
 

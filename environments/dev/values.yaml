@@ -37,6 +37,23 @@ airflow:
     repository: realtime-sales-airflow
     tag: 0.1.0
     pullPolicy: Never
+mdm:
+  enabled: true
+  writer:
+    image:
+      repository: realtime-sales-mdm-writer
+      tag: 0.1.0
+      pullPolicy: Never
+  cdcProducer:
+    image:
+      repository: realtime-sales-mdm-cdc-producer
+      tag: 0.1.0
+      pullPolicy: Never
+  pysparkSync:
+    image:
+      repository: realtime-sales-mdm-pyspark-sync
+      tag: 0.1.0
+      pullPolicy: Never
 observability:
   enabled: true
 kafka:

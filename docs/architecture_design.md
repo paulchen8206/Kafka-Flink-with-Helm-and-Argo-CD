@@ -219,6 +219,8 @@ This implementation follows a modern data platform pattern adapted for local dev
   `dev -> qa -> prd` with gates in `docs/runbook.md`.
 - Explicit health checkpoints:
   Dedicated health commands for pods, jobs, topic flow, and dbt outputs.
+- Deterministic schema naming:
+  dbt runtime must include schema naming macro override so models consistently materialize in `bronze`, `silver`, and `gold` (not `public_*`).
 - Reproducible local environments:
   Compose for fast loops and kind+Helm for Kubernetes parity.
 

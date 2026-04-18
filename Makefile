@@ -5,6 +5,9 @@ PROCESSOR_IMAGE ?= realtime-sales-processor:0.1.0
 CONNECT_IMAGE   ?= realtime-sales-connect:0.1.0
 DBT_IMAGE       ?= realtime-sales-dbt:0.1.0
 AIRFLOW_IMAGE   ?= realtime-sales-airflow:0.1.0
+MDM_WRITER_IMAGE ?= realtime-sales-mdm-writer:0.1.0
+MDM_CDC_PRODUCER_IMAGE ?= realtime-sales-mdm-cdc-producer:0.1.0
+MDM_PYSPARK_SYNC_IMAGE ?= realtime-sales-mdm-pyspark-sync:0.1.0
 ENV             ?= dev
 KAFKA_BOOTSTRAP ?= kafka:9092
 TOPIC           ?=
@@ -98,6 +101,9 @@ docker-build: ## [B]  Build producer + processor Docker images
 	docker build -t "$(CONNECT_IMAGE)" ./connect
 	docker build -t "$(DBT_IMAGE)" ./analytics/dbt
 	docker build -t "$(AIRFLOW_IMAGE)" ./airflow
+	docker build -t "$(MDM_WRITER_IMAGE)" ./mdm-writer
+	docker build -t "$(MDM_CDC_PRODUCER_IMAGE)" ./mdm-cdc-producer
+	docker build -t "$(MDM_PYSPARK_SYNC_IMAGE)" ./mdm-pyspark-sync
 
 kind-load: ## [B]  Load images into the kind cluster
 	kind load docker-image --name "$(CLUSTER_NAME)" "$(PRODUCER_IMAGE)"
@@ -105,6 +111,9 @@ kind-load: ## [B]  Load images into the kind cluster
 	kind load docker-image --name "$(CLUSTER_NAME)" "$(CONNECT_IMAGE)"
 	kind load docker-image --name "$(CLUSTER_NAME)" "$(DBT_IMAGE)"
 	kind load docker-image --name "$(CLUSTER_NAME)" "$(AIRFLOW_IMAGE)"
+	kind load docker-image --name "$(CLUSTER_NAME)" "$(MDM_WRITER_IMAGE)"
+	kind load docker-image --name "$(CLUSTER_NAME)" "$(MDM_CDC_PRODUCER_IMAGE)"
+	kind load docker-image --name "$(CLUSTER_NAME)" "$(MDM_PYSPARK_SYNC_IMAGE)"
 
 images: docker-build kind-load ## [B]  Build images and load into kind  [scripts/build-images.sh]
 

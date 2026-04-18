@@ -14,7 +14,7 @@ Use only one routine at a time for a clean workflow.
 | Argo CD UI | N/A | https://localhost:8443 (after `kubectl -n argocd port-forward svc/argocd-server 8443:443`) | admin | `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 --decode; echo` |
 | MinIO Console | http://localhost:9001 | http://localhost:9001 (after `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-minio 9001:9001`) | minio | minio123 |
 | Postgres | 127.0.0.1:5432 / db `analytics` | 127.0.0.1:5433 / db `analytics` (after `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-postgres 5433:5432`) | analytics | analytics |
-| MySQL MDM | 127.0.0.1:3306 / db `mdm` | N/A | root | mdmroot |
+| MySQL MDM | 127.0.0.1:3306 / db `mdm` | 127.0.0.1:3307 / db `mdm` (after `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-mysql-mdm 3307:3306`) | root | mdmroot |
 | Airflow UI | http://localhost:8084 | http://localhost:8084 (after `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-airflow 8084:8080`) | admin | admin |
 
 ## Operator Cheat Sheet
@@ -346,6 +346,8 @@ Repeat the consumer command for:
 - sales_order
 - sales_order_line_item
 - customer_sales
+- mdm_customer
+- mdm_product
 
 ### B6. Resync and full reset
 
@@ -393,8 +395,22 @@ make helm-health-dev
 
 Expected healthy state:
 
-- Deployments in `Running`: producer, processor, kafka-ui, minio, postgres, connect, airflow, prometheus, loki, grafana.
-- One-shot Jobs in `Complete`: `realtime-dev-realtime-app-minio-init`, `realtime-dev-realtime-app-connect-init`, `realtime-dev-realtime-app-dbt`.
+- Deployments in `Running`: producer, processor, kafka-ui, minio, postgres, connect, airflow, mysql-mdm, mdm-writer, mdm-connect, mdm-cdc-producer, mdm-pyspark-sync, prometheus, loki, grafana.
+- One-shot Jobs in `Complete`: `realtime-dev-realtime-app-minio-init`, `realtime-dev-realtime-app-connect-init`, `realtime-dev-realtime-app-mdm-connect-init`, `realtime-dev-realtime-app-dbt`.
+
+Validate MDM topic flow in cluster:
+
+```bash
+kubectl -n realtime-dev exec realtime-dev-kafka-controller-0 -- \
+  /opt/bitnami/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server realtime-dev-kafka:9092 \
+  --topic mdm_customer --partition 0 --offset 0 --max-messages 1 --timeout-ms 15000
+
+kubectl -n realtime-dev exec realtime-dev-kafka-controller-0 -- \
+  /opt/bitnami/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server realtime-dev-kafka:9092 \
+  --topic mdm_product --partition 0 --offset 0 --max-messages 1 --timeout-ms 15000
+```
 
 Open warehouse and scheduling UIs:
 
@@ -408,6 +424,7 @@ Argo CD source note:
 - Argo CD syncs what is committed in the configured Git repo/branch.
 - Local uncommitted chart edits are validated by direct Helm commands (`make helm-reboot-dev`) but are not synced by Argo CD until pushed.
 - If app status shows `ComparisonError` and `SYNC STATUS: Unknown` with repository auth errors, add repository credentials to Argo CD for `https://github.com/paulchen8206/Kafka-Flink-with-Helm-and-Argo-CD.git`.
+- If app status is `Healthy` but `OutOfSync`, treat Git as source of truth and sync the app before trusting runtime drift-sensitive checks.
 
 ## Routine C: QA/PRD GitOps to Cloud Kubernetes (AWS, GCP, Azure)
 
@@ -600,6 +617,78 @@ For immediate local validation while credentials are pending, use:
 ```bash
 make helm-reboot-dev
 make helm-health-dev
+```
+
+### Warehouse schemas appear as `public_bronze/public_silver/public_gold`
+
+Symptom:
+
+- dbt logs show models materialized in `public_*` schemas.
+- Warehouse checks show duplicate schema families (`bronze` and `public_bronze`, etc.).
+
+Root cause:
+
+- dbt schema naming macro is not present in the runtime dbt project mounted by Helm.
+- In Argo CD mode, local Helm edits do not take effect until committed and synced.
+
+Detect quickly:
+
+```bash
+kubectl -n realtime-dev exec deploy/realtime-dev-realtime-app-postgres -- \
+  psql -U analytics -d analytics -c "select schema_name from information_schema.schemata where schema_name like 'public_%' or schema_name in ('landing','bronze','silver','gold') order by 1;"
+```
+
+Permanent fix:
+
+1. Ensure the chart mounts `generate_schema_name.sql` under `/dbt/macros` in both dbt Job and Airflow dbt volume items.
+2. Commit and push the chart change.
+3. Sync the Argo CD app and verify dbt runs materialize into `bronze/silver/gold` only.
+
+One-time cleanup (move objects and drop `public_*` schemas):
+
+```bash
+cat <<'SQL' | kubectl -n realtime-dev exec -i deploy/realtime-dev-realtime-app-postgres -- psql -U analytics -d analytics
+BEGIN;
+CREATE SCHEMA IF NOT EXISTS bronze;
+CREATE SCHEMA IF NOT EXISTS silver;
+CREATE SCHEMA IF NOT EXISTS gold;
+DO $$
+DECLARE
+  rec RECORD;
+  target_schema text;
+  obj_type text;
+BEGIN
+  FOR rec IN
+    SELECT n.nspname AS src_schema, c.relname AS rel_name, c.relkind
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname IN ('public_bronze','public_silver','public_gold')
+      AND c.relkind IN ('r','v','m','S','f','p')
+  LOOP
+    target_schema := replace(rec.src_schema, 'public_', '');
+    obj_type := CASE rec.relkind
+      WHEN 'r' THEN 'TABLE'
+      WHEN 'p' THEN 'TABLE'
+      WHEN 'v' THEN 'VIEW'
+      WHEN 'm' THEN 'MATERIALIZED VIEW'
+      WHEN 'S' THEN 'SEQUENCE'
+      WHEN 'f' THEN 'FOREIGN TABLE'
+    END;
+    EXECUTE format('ALTER %s %I.%I SET SCHEMA %I', obj_type, rec.src_schema, rec.rel_name, target_schema);
+  END LOOP;
+END$$;
+DROP SCHEMA IF EXISTS public_bronze CASCADE;
+DROP SCHEMA IF EXISTS public_silver CASCADE;
+DROP SCHEMA IF EXISTS public_gold CASCADE;
+COMMIT;
+SQL
+```
+
+Post-cleanup verification:
+
+```bash
+kubectl -n realtime-dev exec deploy/realtime-dev-realtime-app-postgres -- \
+  psql -U analytics -d analytics -c "select schema_name from information_schema.schemata where schema_name like 'public_%' or schema_name in ('landing','bronze','silver','gold') order by 1;"
 ```
 
 ### End-to-end smoke command bundle (cluster)

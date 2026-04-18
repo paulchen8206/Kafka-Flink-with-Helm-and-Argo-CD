@@ -97,6 +97,58 @@ airflow:
   service:
     type: ClusterIP
     port: 8080
+mdm:
+  enabled: false
+  mysql:
+    image:
+      repository: mysql
+      tag: "8.4"
+      pullPolicy: IfNotPresent
+    service:
+      type: ClusterIP
+      port: 3306
+    rootPassword: mdmroot
+    database: mdm
+    serverId: "223344"
+  writer:
+    replicas: 1
+    image:
+      repository: realtime-sales-mdm-writer
+      tag: 0.1.0
+      pullPolicy: IfNotPresent
+    writeIntervalMs: 3000
+  connect:
+    replicas: 1
+    image:
+      repository: quay.io/debezium/connect
+      tag: "3.0"
+      pullPolicy: IfNotPresent
+    service:
+      type: ClusterIP
+      port: 8083
+    groupId: mdm-connect-cluster
+    configStorageTopic: mdm-connect-configs
+    offsetStorageTopic: mdm-connect-offsets
+    statusStorageTopic: mdm-connect-status
+    curlImage:
+      repository: curlimages/curl
+      tag: 8.12.1
+      pullPolicy: IfNotPresent
+  cdcProducer:
+    replicas: 1
+    image:
+      repository: realtime-sales-mdm-cdc-producer
+      tag: 0.1.0
+      pullPolicy: IfNotPresent
+    groupId: mdm-cdc-publisher
+    offsetReset: earliest
+  pysparkSync:
+    replicas: 1
+    image:
+      repository: realtime-sales-mdm-pyspark-sync
+      tag: 0.1.0
+      pullPolicy: IfNotPresent
+    syncIntervalSec: 15
 observability:
   enabled: false
   prometheus:
@@ -163,6 +215,18 @@ kafka:
     - name: customer_sales
       partitions: 3
       replicationFactor: 1
+    - name: mdm_customer
+      partitions: 3
+      replicationFactor: 1
+    - name: mdm_product
+      partitions: 3
+      replicationFactor: 1
+    - name: mdm_mysql.mdm.customer360
+      partitions: 3
+      replicationFactor: 1
+    - name: mdm_mysql.mdm.product_master
+      partitions: 3
+      replicationFactor: 1
     - name: connect-configs
       partitions: 1
       replicationFactor: 1
@@ -173,5 +237,14 @@ kafka:
       partitions: 3
       replicationFactor: 1
     - name: connect-iceberg-control
+      partitions: 3
+      replicationFactor: 1
+    - name: mdm-connect-configs
+      partitions: 1
+      replicationFactor: 1
+    - name: mdm-connect-offsets
+      partitions: 6
+      replicationFactor: 1
+    - name: mdm-connect-status
       partitions: 3
       replicationFactor: 1

@@ -52,6 +52,48 @@ data:
       updatedat timestamptz,
       currency text
     );
+
+    create table if not exists landing.mdm_customer360 (
+      customer_id text,
+      customer_name text,
+      customer_email text,
+      customer_segment text,
+      currency text,
+      first_order_timestamp timestamptz,
+      last_order_timestamp timestamptz,
+      projected_order_count integer,
+      projected_total_spent numeric(18,2),
+      projection_updated_at timestamptz,
+      updated_at timestamptz
+    );
+
+    create table if not exists landing.mdm_product_master (
+      product_id text,
+      product_name text,
+      currency text,
+      first_seen_at timestamptz,
+      last_seen_at timestamptz,
+      orders_count integer,
+      units_sold integer,
+      avg_unit_price numeric(18,2),
+      updated_at timestamptz
+    );
+
+    create table if not exists landing.mdm_date (
+      date_key integer,
+      full_date date,
+      day_of_month integer,
+      day_of_week integer,
+      day_name text,
+      week_of_year integer,
+      month_of_year integer,
+      month_name text,
+      quarter_of_year integer,
+      year_number integer,
+      is_weekend boolean,
+      created_at timestamptz,
+      updated_at timestamptz
+    );
   dbt_project.yml: |
     name: realtime_analytics
     version: 1.0.0
@@ -84,6 +126,14 @@ data:
           dbname: {{ .Values.postgres.auth.database }}
           schema: public
           threads: 4
+  generate_schema_name.sql: |
+    {% macro generate_schema_name(custom_schema_name, node) -%}
+      {%- if custom_schema_name is none -%}
+        {{ "{{" }} target.schema {{ "}}" }}
+      {%- else -%}
+        {{ "{{" }} custom_schema_name | trim {{ "}}" }}
+      {%- endif -%}
+    {%- endmacro %}
   stg_sales_order.sql: |
     select
       orderid as order_id,
@@ -122,6 +172,220 @@ data:
       updatedat as updated_at,
       currency
     from landing.customer_sales
+  stg_mdm_customer360.sql: |
+    select
+      customer_id,
+      customer_name,
+      customer_email,
+      customer_segment,
+      currency,
+      first_order_timestamp,
+      last_order_timestamp,
+      projected_order_count::bigint as projected_order_count,
+      projected_total_spent::numeric(18,2) as projected_total_spent,
+      projection_updated_at,
+      updated_at
+    from landing.mdm_customer360
+  stg_mdm_product_master.sql: |
+    select
+      product_id,
+      product_name,
+      currency,
+      first_seen_at,
+      last_seen_at,
+      orders_count::bigint as orders_count,
+      units_sold::bigint as units_sold,
+      avg_unit_price::numeric(18,2) as avg_unit_price,
+      updated_at
+    from landing.mdm_product_master
+  stg_mdm_date.sql: |
+    select
+      date_key::int as date_key,
+      full_date as date_day,
+      day_of_month::int as day_of_month,
+      day_of_week::int as day_of_week_iso,
+      day_name,
+      week_of_year::int as week_of_year,
+      month_of_year::int as month,
+      month_name,
+      quarter_of_year::int as quarter,
+      year_number::int as year,
+      is_weekend,
+      created_at,
+      updated_at
+    from landing.mdm_date
+  dim_mdm_customer.sql: |
+    select
+      customer_id,
+      customer_name,
+      customer_email,
+      customer_segment,
+      currency,
+      first_order_timestamp,
+      last_order_timestamp,
+      projected_order_count,
+      projected_total_spent,
+      projection_updated_at,
+      updated_at
+    from {{ "{{" }} ref('stg_mdm_customer360') {{ "}}" }}
+  dim_mdm_product.sql: |
+    select
+      product_id,
+      product_name,
+      currency,
+      first_seen_at,
+      last_seen_at,
+      orders_count,
+      units_sold,
+      avg_unit_price,
+      updated_at
+    from {{ "{{" }} ref('stg_mdm_product_master') {{ "}}" }}
+  dim_mdm_date.sql: |
+    select
+      date_key,
+      date_day,
+      year,
+      quarter,
+      month,
+      month_name,
+      week_of_year,
+      day_of_month,
+      day_of_week_iso,
+      day_name,
+      is_weekend,
+      created_at,
+      updated_at
+    from {{ "{{" }} ref('stg_mdm_date') {{ "}}" }}
+  fact_sales_order.sql: |
+    with orders as (
+      select * from {{ "{{" }} ref('stg_sales_order') {{ "}}" }}
+    ),
+    line_items as (
+      select * from {{ "{{" }} ref('stg_sales_order_line_item') {{ "}}" }}
+    ),
+    dim_customer as (
+      select * from {{ "{{" }} ref('dim_mdm_customer') {{ "}}" }}
+    ),
+    dim_product as (
+      select * from {{ "{{" }} ref('dim_mdm_product') {{ "}}" }}
+    ),
+    dim_date as (
+      select * from {{ "{{" }} ref('dim_mdm_date') {{ "}}" }}
+    ),
+    joined as (
+      select
+        li.order_id,
+        li.line_item_id,
+        li.order_timestamp,
+        cast(li.order_timestamp as date) as order_date,
+        li.customer_id,
+        li.sku as product_id,
+        li.quantity,
+        li.unit_price,
+        li.line_total,
+        o.order_total,
+        o.line_item_count,
+        coalesce(li.currency, o.currency) as currency,
+        coalesce(dc.customer_name, o.customer_name, li.customer_name) as customer_name,
+        dc.customer_email,
+        dc.customer_segment,
+        coalesce(dp.product_name, li.product_name) as product_name,
+        dd.date_key,
+        dd.year,
+        dd.quarter,
+        dd.month,
+        dd.month_name,
+        dd.day_name,
+        dd.is_weekend
+      from line_items li
+      left join orders o
+        on li.order_id = o.order_id
+      left join dim_customer dc
+        on li.customer_id = dc.customer_id
+      left join dim_product dp
+        on li.sku = dp.product_id
+      left join dim_date dd
+        on cast(li.order_timestamp as date) = dd.date_day
+    )
+    select
+      order_id,
+      line_item_id,
+      order_timestamp,
+      order_date,
+      customer_id,
+      customer_name,
+      customer_email,
+      customer_segment,
+      product_id,
+      product_name,
+      date_key,
+      year,
+      quarter,
+      month,
+      month_name,
+      day_name,
+      is_weekend,
+      quantity,
+      unit_price,
+      line_total,
+      order_total,
+      line_item_count,
+      currency
+    from joined
+  fact_sales_order.yml: |
+    version: 2
+    models:
+    - name: fact_sales_order
+      description: "Line-level sales fact enriched with MDM customer, product, and date dimensions."
+      columns:
+      - name: order_id
+        description: "Business order identifier."
+        tests:
+        - not_null
+      - name: line_item_id
+        description: "Unique line item identifier within an order."
+        tests:
+        - not_null
+      - name: customer_id
+        description: "Customer business key joined to the MDM customer dimension."
+        tests:
+        - not_null
+        - relationships:
+            config:
+              severity: warn
+              where: "customer_id like 'CUST-%'"
+            arguments:
+              to: ref('dim_mdm_customer')
+              field: customer_id
+      - name: product_id
+        description: "Product business key joined to the MDM product dimension."
+        tests:
+        - not_null
+        - relationships:
+            arguments:
+              to: ref('dim_mdm_product')
+              field: product_id
+      - name: date_key
+        description: "Calendar key from the MDM date dimension."
+        tests:
+        - relationships:
+            arguments:
+              to: ref('dim_mdm_date')
+              field: date_key
+      - name: currency
+        description: "Transaction currency code."
+        tests:
+        - not_null
+        - accepted_values:
+            arguments:
+              values: ['USD']
+      - name: is_weekend
+        description: "True when the order date is on a weekend."
+        tests:
+        - accepted_values:
+            arguments:
+              values: [true, false]
+              quote: false
   gold_customer_sales_summary.sql: |
     with sales as (
       select * from {{ "{{" }} ref('stg_customer_sales') {{ "}}" }}
@@ -673,12 +937,30 @@ spec:
                 path: dbt_project.yml
               - key: profiles.yml
                 path: profiles.yml
+              - key: generate_schema_name.sql
+                path: macros/generate_schema_name.sql
               - key: stg_sales_order.sql
-                path: models/staging/stg_sales_order.sql
+                path: models/bronze/stg_sales_order.sql
               - key: stg_sales_order_line_item.sql
-                path: models/staging/stg_sales_order_line_item.sql
+                path: models/bronze/stg_sales_order_line_item.sql
               - key: stg_customer_sales.sql
-                path: models/staging/stg_customer_sales.sql
+                path: models/bronze/stg_customer_sales.sql
+              - key: stg_mdm_customer360.sql
+                path: models/bronze/stg_mdm_customer360.sql
+              - key: stg_mdm_product_master.sql
+                path: models/bronze/stg_mdm_product_master.sql
+              - key: stg_mdm_date.sql
+                path: models/bronze/stg_mdm_date.sql
+              - key: dim_mdm_customer.sql
+                path: models/silver/dim_mdm_customer.sql
+              - key: dim_mdm_product.sql
+                path: models/silver/dim_mdm_product.sql
+              - key: dim_mdm_date.sql
+                path: models/silver/dim_mdm_date.sql
+              - key: fact_sales_order.sql
+                path: models/silver/fact_sales_order.sql
+              - key: fact_sales_order.yml
+                path: models/silver/fact_sales_order.yml
               - key: gold_customer_sales_summary.sql
                 path: models/gold/gold_customer_sales_summary.sql
 {{- end }}
@@ -822,12 +1104,30 @@ spec:
                 path: dbt_project.yml
               - key: profiles.yml
                 path: profiles.yml
+              - key: generate_schema_name.sql
+                path: macros/generate_schema_name.sql
               - key: stg_sales_order.sql
-                path: models/staging/stg_sales_order.sql
+                path: models/bronze/stg_sales_order.sql
               - key: stg_sales_order_line_item.sql
-                path: models/staging/stg_sales_order_line_item.sql
+                path: models/bronze/stg_sales_order_line_item.sql
               - key: stg_customer_sales.sql
-                path: models/staging/stg_customer_sales.sql
+                path: models/bronze/stg_customer_sales.sql
+              - key: stg_mdm_customer360.sql
+                path: models/bronze/stg_mdm_customer360.sql
+              - key: stg_mdm_product_master.sql
+                path: models/bronze/stg_mdm_product_master.sql
+              - key: stg_mdm_date.sql
+                path: models/bronze/stg_mdm_date.sql
+              - key: dim_mdm_customer.sql
+                path: models/silver/dim_mdm_customer.sql
+              - key: dim_mdm_product.sql
+                path: models/silver/dim_mdm_product.sql
+              - key: dim_mdm_date.sql
+                path: models/silver/dim_mdm_date.sql
+              - key: fact_sales_order.sql
+                path: models/silver/fact_sales_order.sql
+              - key: fact_sales_order.yml
+                path: models/silver/fact_sales_order.yml
               - key: gold_customer_sales_summary.sql
                 path: models/gold/gold_customer_sales_summary.sql
 ---
