@@ -1,238 +1,238 @@
 # Architecture Design
 
-This document is the canonical architecture reference for the project and complements the operational guide in `docs/runbook.md`.
+This document is the canonical architecture reference for this project. It organizes the platform as a modern data architecture that combines batch and streaming, ELT modeling, lakehouse storage, and GitOps deployment automation.
 
-## 1. Project-Level Architecture Diagram
+## 1. Purpose and Scope
+
+This platform demonstrates how to build a full-stack modern data system with these goals:
+
+- Capture and process real-time events with Kafka and Flink.
+- Persist data in a lakehouse pattern (Iceberg on object storage) and in an analytics warehouse pattern (Postgres used to mimic Snowflake-like warehouse behavior).
+- Apply ELT transformations with dbt using medallion layers (bronze, silver, gold).
+- Incorporate dimensional modeling for analytics consumption.
+- Run services in containers (Docker) and orchestrate on Kubernetes.
+- Support polyglot engineering using Java and Python.
+- Automate deployment through Helm (release packaging) and Argo CD (GitOps reconciliation).
+
+Out of scope for this demo:
+
+- Cloud-managed production hardening (fully managed Kafka, managed object storage, enterprise IAM).
+- Regulatory controls and enterprise governance implementation details.
+
+## 2. Architectural Principles
+
+- Event-driven first:
+  Domain changes are emitted as immutable events to Kafka.
+- Separation of concerns:
+  Ingestion, stream processing, storage, and transformation are independently deployable components.
+- ELT over ETL:
+  Raw/landing data is loaded first, then transformed in the warehouse/lakehouse layer with dbt.
+- Streaming plus batch unification:
+  Streaming outputs are continuously available while batch-style analytics models are refreshed on schedule.
+- Declarative operations:
+  Helm values and Argo CD manifests drive environment consistency.
+- Progressive environment promotion:
+  Same topology across dev, qa, and prd with environment overlays.
+
+## 3. Technology Mapping
+
+| Capability | Technology in this project | Role |
+| --- | --- | --- |
+| Realtime event backbone | Kafka | Durable event transport, fan-out, and replay |
+| Realtime stream compute | Flink (embedded in Spring Boot processor) | Event decomposition and transformation |
+| Additional compute/sync | PySpark | MDM table synchronization to analytics landing |
+| Warehouse simulation | Postgres | Mimics Snowflake-style SQL analytics target for local development |
+| Lakehouse storage | Iceberg tables on MinIO | Open table format on object storage |
+| ELT modeling | dbt | Bronze/silver/gold SQL transformations and dimensional model materialization |
+| CDC for master data | Debezium + MySQL | Capture and stream row-level changes |
+| Orchestration | Airflow | Scheduled dbt execution |
+| Container runtime | Docker / Docker Compose | Local service packaging and fast inner-loop execution |
+| Container orchestration | Kubernetes (kind locally) | Cluster-style deployment and parity testing |
+| Release packaging | Helm | Templated, versioned deployment definitions |
+| GitOps delivery | Argo CD | Continuous reconciliation from Git to cluster |
+| Programming languages | Java + Python | Java for stream processor, Python for producers/integration/sync services |
+
+## 4. Logical Architecture Overview
 
 ```mermaid
 flowchart LR
-   subgraph Ingestion[Ingestion and Stream Processing]
-      direction LR
-      PR[Producer\nPython event generator]
-      K[(Kafka)]
-      FL[Processor\nSpring Boot + Flink]
-   end
-
-  subgraph MDM[MDM and CDC]
-    direction TB
-    MW[MDM Writer\nMySQL upserts]
-    MY[(MySQL MDM)]
-    MDC[Debezium Connect]
-    MCP[MDM CDC Publisher]
-    MSP[MDM PySpark Sync]
+  subgraph RT[Realtime Ingestion and Processing]
+    PR[Python Producer]
+    K[(Kafka)]
+    FL[Java Spring Boot + Flink Processor]
+    PR -->|raw_sales_orders| K
+    K -->|consume| FL
+    FL -->|sales_order| K
+    FL -->|sales_order_line_item| K
+    FL -->|customer_sales| K
   end
 
-   subgraph Serving[Serving and Consumption]
-      direction TB
-      KUI[Kafka UI]
-      ARGO[Argo CD]
-      GRAF[Grafana]
-   end
+  subgraph MDM[Master Data and CDC]
+    MW[MDM Writer]
+    MY[(MySQL MDM)]
+    DBZ[Debezium Connect]
+    MCP[MDM CDC Publisher]
+    MW --> MY
+    MY -->|binlog CDC| DBZ
+    DBZ -->|raw MDM CDC topics| K
+    K --> MCP
+    MCP -->|mdm_customer / mdm_product| K
+  end
 
-   subgraph Lakehouse[Lakehouse and Warehouse]
-      direction TB
-      KC[Kafka Connect]
-      MINIO[(MinIO Object Storage)]
-      PG[(Postgres Warehouse)]
-      DBT[dbt Transform]
-      AF[Airflow Scheduler]
-   end
+  subgraph LH[Lakehouse and Warehouse]
+    KC[Kafka Connect Sinks]
+    IO[(MinIO + Iceberg)]
+    PG[(Postgres Landing + Analytics)]
+    SP[PySpark MDM Sync]
+    DBT[dbt Medallion + Dimensional Models]
+    AF[Airflow Scheduler]
+    K --> KC
+    KC --> IO
+    KC --> PG
+    MY --> SP
+    SP --> PG
+    PG --> DBT
+    AF --> DBT
+  end
 
-   PR -->|raw_sales_orders| K
-   K -->|consume| FL
-   FL -->|sales_order| K
-   FL -->|sales_order_line_item| K
-   FL -->|customer_sales| K
-
-  MW --> MY
-  MY -->|binlog CDC| MDC
-  MDC -->|mdm_mysql.mdm.customer360| K
-  MDC -->|mdm_mysql.mdm.product_master| K
-  K -->|consume raw MDM CDC| MCP
-  MCP -->|mdm_customer| K
-  MCP -->|mdm_product| K
-  MSP -->|sync tables| PG
-
-   K --> KUI
-   K --> KC
-   KC -->|Iceberg tables| MINIO
-   KC -->|landing schema| PG
-  DBT -->|bronze, silver, gold| PG
-   AF -->|scheduled dbt runs| DBT
-
-   ARGO -->|GitOps deploy| Ingestion
-   ARGO -->|GitOps deploy| Lakehouse
-   GRAF -->|metrics and logs| Ingestion
-   GRAF -->|metrics and logs| Lakehouse
+  subgraph Ops[Platform Ops]
+    H[Helm]
+    A[Argo CD]
+    O[Kafka UI / Prometheus / Loki / Grafana]
+    A --> H
+    O --> RT
+    O --> LH
+  end
 ```
 
-## 2. Deployment Component Diagram
+## 5. End-to-End Data Flow
 
-```mermaid
-flowchart TB
-   subgraph LocalCompose[Routine A: Docker Compose]
-      direction TB
-      C1[producer]
-      C2[processor]
-      C3[kafka]
-      C4[kafka-ui]
-      C5[connect]
-      C6[connect-init Job]
-    C7[mysql-mdm]
-    C8[mdm-writer]
-    C9[mdm-connect]
-    C10[mdm-connect-init Job]
-    C11[mdm-cdc-producer]
-    C12[mdm-pyspark-sync]
-    C13[minio]
-    C14[minio-init Job]
-    C15[postgres]
-    C16[dbt one-shot Job]
-    C17[airflow]
-   end
+### 5.1 Realtime Sales Domain Flow
 
-   subgraph KindHelm[Routine B: kind + Helm + Argo CD]
-      direction TB
-      K1[realtime-app Helm release]
-      K2[kafka chart dependency]
-      K3[producer Deployment]
-      K4[processor Deployment]
-      K5[kafka-ui Deployment]
-      K6[connect Deployment]
-      K7[minio Deployment]
-      K8[postgres Deployment]
-      K9[airflow Deployment]
-      K10[minio-init Job]
-      K11[connect-init Job]
-      K12[dbt Job]
-      K13[prometheus/loki/grafana]
-      K14[argocd Application]
-   end
+1. Python producer publishes composite sales events to `raw_sales_orders`.
+2. Java/Flink processor consumes raw events and fans out normalized streams:
+   - `sales_order`
+   - `sales_order_line_item`
+   - `customer_sales`
+3. Kafka Connect sinks these streams to:
+   - Iceberg tables in MinIO (lakehouse storage)
+   - Postgres `landing` schema tables (warehouse-style landing)
+4. dbt models build medallion layers and dimensional outputs in Postgres.
 
-   K14 --> K1
-   K1 --> K3
-   K1 --> K4
-   K1 --> K5
-   K1 --> K6
-   K1 --> K7
-   K1 --> K8
-   K1 --> K9
-   K1 --> K10
-   K1 --> K11
-   K1 --> K12
-   K1 --> K13
-   K1 --> K2
-```
+### 5.2 Master Data (MDM) Flow
 
-## 3. End-to-End Dataflow Diagram
+1. MDM writer upserts `customer360` and `product_master` entities into MySQL.
+2. Debezium captures MySQL binlog changes and emits raw CDC topics.
+3. CDC publisher normalizes/curates CDC records into analytics-friendly topics (`mdm_customer`, `mdm_product`).
+4. PySpark sync job loads MySQL MDM tables into Postgres landing MDM tables.
+5. dbt joins transactional and MDM data to build conformed dimensions and facts.
 
-```mermaid
-flowchart LR
-   E[Order Event\nComposite payload] --> T0[(raw_sales_orders)]
-   T0 --> P[Flink topology]
-   P --> T1[(sales_order)]
-   P --> T2[(sales_order_line_item)]
-   P --> T3[(customer_sales)]
+## 6. ELT and Medallion Design
 
-  MW[MDM Writer] --> MY[(MySQL mdm.customer360 and mdm.product_master)]
-  MY --> MDC[Debezium MySQL Source]
-  MDC --> T4[(mdm_mysql.mdm.customer360)]
-  MDC --> T5[(mdm_mysql.mdm.product_master)]
-  T4 --> MCP[MDM CDC Publisher]
-  T5 --> MCP
-  MCP --> T6[(mdm_customer)]
-  MCP --> T7[(mdm_product)]
+This implementation follows ELT with medallion-style layers:
 
-   T1 --> KC[Kafka Connect]
-   T2 --> KC
-   T3 --> KC
+- `landing`:
+  Raw ingested tables from Kafka Connect and PySpark sync.
+- `bronze`:
+  Lightweight standardization and source-aligned staging models.
+- `silver`:
+  Cleaned, conformed dimensions and facts for trusted analytical use.
+- `gold`:
+  Business-facing aggregates and summary outputs.
 
-   KC --> L1[(Postgres landing.sales_order)]
-   KC --> L2[(Postgres landing.sales_order_line_item)]
-   KC --> L3[(Postgres landing.customer_sales)]
-   KC --> I[(Iceberg on MinIO)]
-  MS[MDM PySpark Sync] --> L4[(Postgres landing.mdm_customer360)]
-  MS --> L5[(Postgres landing.mdm_product_master)]
-  MS --> L6[(Postgres landing.mdm_date)]
-  MY --> MS
+ELT rationale:
 
-   L1 --> D[dbt]
-   L2 --> D
-   L3 --> D
-  L4 --> D
-  L5 --> D
-  L6 --> D
+- Keep ingestion simple and resilient.
+- Centralize transformation logic in version-controlled dbt SQL.
+- Support lineage, testing, and repeatable model builds.
 
-  D --> B1[(bronze.* views)]
-  D --> S1[(silver.* tables)]
-  D --> G1[(gold.gold_customer_sales_summary)]
-   AF[Airflow schedule] --> D
-```
+## 7. Dimensional Modeling in the Lakehouse/Warehouse
 
-## 4. Modern Data Architecture Framework
+The silver and gold layers implement dimensional analytics patterns:
 
-This implementation follows a modern data platform pattern adapted for local developer productivity and GitOps workflows.
+- Conformed dimensions:
+  - `dim_mdm_customer`
+  - `dim_mdm_product`
+  - `dim_mdm_date`
+- Transactional fact table:
+  - `fact_sales_order`
+- Business presentation table:
+  - `gold_customer_sales_summary`
 
-### 4.1 Architectural Layers
+Modeling benefits:
 
-- Event ingestion layer:
-  Producer publishes immutable domain events to Kafka.
-- Stream processing layer:
-  Flink performs real-time decomposition and enrichment into analytics-ready topics.
-- Lakehouse ingestion layer:
-  Kafka Connect persists streams into both object storage (Iceberg on MinIO) and relational landing (Postgres).
-- Master data and CDC layer:
-  MySQL stores customer and product master entities, Debezium captures row changes, and a CDC publisher creates curated MDM Kafka topics.
-- MDM landing sync layer:
-  PySpark continuously synchronizes MySQL MDM tables into Postgres landing tables consumed by dbt.
-- Transformation layer:
-  dbt applies SQL-first modeling from landing to bronze, silver, and gold.
-- Orchestration layer:
-  Airflow schedules recurring dbt execution.
-- Observability and operations layer:
-  Kafka UI, Grafana, Loki, Prometheus, and Argo CD provide introspection and control.
+- Simplifies BI query logic.
+- Improves join consistency through conformed keys and attributes.
+- Supports both operational reporting and higher-level KPI summary views.
 
-### 4.2 Engineering Patterns Used
+## 8. Deployment and Runtime Topology
 
-- Event-carried state transfer:
-  Composite order events carry enough context for downstream decomposition.
-- Topic fan-out pattern:
-  One raw topic fans into domain-focused topics for bounded consumers.
-- Dual-sink ingestion pattern:
-  Same stream is persisted to both object storage and warehouse landing.
-- CDC republish pattern:
-  Raw Debezium CDC topics are normalized and republished to curated MDM topics.
-- Medallion-style modeling:
-  Landing -> bronze -> silver -> gold presentation.
-- Idempotent bootstrap jobs:
-  Connector registration, MinIO bucket creation, and dbt bootstrap run as one-shot jobs.
-- GitOps deployment pattern:
-  Argo CD continuously reconciles declarative manifests and Helm values.
-- Environment overlay pattern:
-  Shared chart + environment-specific values (`dev`, `qa`, `prd`).
+### 8.1 Local Development Runtime (Docker Compose)
 
-### 4.3 Reliability and Operability Principles
+- Primary objective: rapid local feedback loop.
+- Includes producer, processor, Kafka, Kafka Connect, MDM services, MinIO, Postgres, dbt bootstrap job, and Airflow.
+- One-shot init jobs (topic init, connector registration, bucket creation, dbt run) support idempotent startup.
 
-- Shift-left validation:
-  Helm render/lint and local kind deployment before shared environment promotion.
-- Progressive promotion:
-  `dev -> qa -> prd` with gates in `docs/runbook.md`.
-- Explicit health checkpoints:
-  Dedicated health commands for pods, jobs, topic flow, and dbt outputs.
-- Deterministic schema naming:
-  dbt runtime must include schema naming macro override so models consistently materialize in `bronze`, `silver`, and `gold` (not `public_*`).
-- Reproducible local environments:
-  Compose for fast loops and kind+Helm for Kubernetes parity.
+### 8.2 Kubernetes Runtime (kind + Helm + Argo CD)
 
-### 4.4 Suggested Next Evolution
+- Primary objective: GitOps-style deployment parity and environment promotion practice.
+- Helm chart templates the full application stack.
+- Argo CD continuously syncs desired state from Git.
+- Environment values (`dev`, `qa`, `prd`) drive differences such as image references, broker endpoints, and scaling.
 
-- Schema governance:
-  Introduce Schema Registry and schema compatibility gates.
-- Data quality contracts:
-  Add dbt tests and freshness checks to deployment gates.
-- Incremental gold models:
-  Shift heavy gold transformations to incremental materializations.
-- Metadata lineage:
-  Integrate OpenLineage-compatible tooling from Airflow/dbt.
-- Security hardening:
-  Move inline credentials to secrets manager and enable TLS/SASL for all environments.
+## 9. CI/CD and GitOps Design
+
+- Source of truth:
+  Git repository stores chart templates, environment values, and Argo CD applications.
+- Delivery mechanism:
+  Helm packages manifests; Argo CD reconciles cluster state to Git state.
+- Promotion strategy:
+  `dev -> qa -> prd` by controlled values/manifests progression.
+- Operational safety:
+  Health checks, logs, and validation scripts are used before promotion.
+
+## 10. Non-Functional Considerations
+
+### 10.1 Scalability
+
+- Kafka partitions and consumer groups provide horizontal scaling for event processing.
+- Flink topology can scale by task parallelism.
+- dbt models can evolve to incremental patterns for larger volumes.
+
+### 10.2 Reliability
+
+- Durable Kafka topics allow replay and recovery.
+- CDC stream preserves data-change history from master data source.
+- Idempotent bootstrap/init jobs reduce operational fragility.
+
+### 10.3 Observability
+
+- Kafka UI for topic inspection.
+- Prometheus/Loki/Grafana stack for metrics and logs in Kubernetes mode.
+- Runbook-driven checks for pipeline health and model outputs.
+
+### 10.4 Security (Demo vs Production)
+
+Current local setup favors simplicity. Production hardening should include:
+
+- Centralized secret management.
+- TLS and authenticated Kafka client/broker traffic.
+- Role-based access control for data stores and runtime services.
+
+## 11. Architecture Decisions Summary
+
+- Postgres is intentionally used as a local warehouse analog to mimic Snowflake-like SQL analytics workflows.
+- Kafka plus Flink provides real-time event decomposition and processing.
+- Iceberg on MinIO demonstrates open lakehouse storage patterns.
+- dbt enforces ELT and medallion layer conventions with version-controlled SQL models.
+- PySpark and Debezium integrate master data and CDC into analytical flows.
+- Docker/Compose supports local speed; Kubernetes/Helm/Argo CD supports GitOps reproducibility.
+- Java and Python are both first-class implementation languages based on service responsibilities.
+
+## 12. Future Enhancements
+
+- Add Schema Registry and compatibility enforcement for Kafka topics.
+- Increase dbt test coverage (uniqueness, referential integrity, freshness).
+- Introduce data lineage metadata and alerting.
+- Externalize secrets and integrate enterprise identity controls.
+- Add performance test suites for streaming and transformation workloads.

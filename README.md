@@ -1,62 +1,38 @@
 # Full Stack Modern Data Architecture and Engineering
 
-This repository implements a realtime sales processing platform that can run in two local modes:
+This repository demonstrates a modern data platform that combines realtime processing, lakehouse storage, ELT modeling, and GitOps delivery.
 
-- Docker Compose for fast application development and topic validation.
-- kind plus Helm plus Argo CD for a GitOps-like local Kubernetes workflow.
+It supports two local operating modes:
 
-The pipeline shape is:
+- Docker Compose for fast development loops.
+- kind plus Helm plus Argo CD for Kubernetes and GitOps workflow simulation.
 
-- The Python producer emits composite order events to `raw_sales_orders`.
-- The Java Spring Boot app starts a Flink DataStream job.
-- Flink splits and transforms records into `sales_order`, `sales_order_line_item`, and `customer_sales`.
-- Kafka Connect sinks processed topics into Iceberg tables on MinIO and mirrors topic data into Postgres landing tables.
-- A MySQL-backed MDM service stores `customer360` and `product_master` records.
-- Debezium captures MySQL CDC events, and a Python CDC publisher emits curated `mdm_customer` and `mdm_product` Kafka topics.
-- dbt builds `bronze`, `silver`, and `gold` models in Postgres as a medallion-style analytics layer.
-- Optional observability services in Kubernetes provide Prometheus, Loki, and Grafana.
+## What This Project Demonstrates
 
-## End-to-End Tech Components
+- Kafka as a realtime event backbone.
+- Flink stream processing embedded in a Java Spring Boot service.
+- CDC-driven MDM integration with MySQL + Debezium.
+- Lakehouse sinks using Iceberg on MinIO.
+- Warehouse-style analytics on Postgres (used as a local Snowflake-like target).
+- dbt ELT with medallion layers (landing -> bronze -> silver -> gold).
+- Airflow orchestration for scheduled model refresh.
+- Docker/Kubernetes runtime and Helm/Argo CD automation.
 
-- Event ingestion: Python producer publishes realtime sales events to Kafka.
-- Stream processing: Java Spring Boot service runs an embedded Apache Flink job for fan-out and transformations.
-- Messaging backbone: Apache Kafka carries raw, processed, and curated MDM topics.
-- CDC and MDM: MySQL stores master data, Debezium captures binlog changes, and Python CDC publisher emits curated MDM streams.
-- Lakehouse ingestion: Kafka Connect sinks streams to Iceberg tables on MinIO and to Postgres landing tables.
-- Warehouse modeling: dbt transforms `landing` data into `bronze`, `silver`, and `gold` layers.
-- Scheduling: Apache Airflow triggers recurring dbt runs.
-- Runtime and delivery: Docker Compose supports local routine A, while kind + Helm + Argo CD provide GitOps-style routine B.
-- Observability: Kafka UI, Grafana, Prometheus, and Loki support monitoring and troubleshooting.
+## End-to-End Flow (High Level)
 
-## Docs Index
+1. Python producer publishes composite sales events to raw_sales_orders.
+2. Java/Flink processor consumes and fans out into sales_order, sales_order_line_item, and customer_sales topics.
+3. Kafka Connect sinks these topics to Iceberg on MinIO and Postgres landing tables.
+4. MDM writer updates MySQL customer and product master records.
+5. Debezium captures MDM CDC; CDC publisher emits curated mdm_customer and mdm_product topics.
+6. PySpark sync moves MDM tables into Postgres landing.
+7. dbt builds bronze, silver, and gold analytics models.
+8. Airflow schedules recurring dbt runs.
 
-- [docs/runbook.md](docs/runbook.md): Hands-on operational guide for local Compose and kind/Helm/Argo CD workflows, including access, validation, troubleshooting, and reset routines.
-- [docs/architecture_design.md](docs/architecture_design.md): Canonical architecture reference with project-level, deployment, and end-to-end dataflow diagrams plus modern data platform patterns.
+## Documentation
 
-## Architecture Snapshot
-
-- Producer emits composite sales events to `raw_sales_orders`.
-- Processor (Spring Boot + Flink) consumes raw events and fans out to `sales_order`, `sales_order_line_item`, and `customer_sales`.
-- MDM writer upserts customer and product master records into MySQL.
-- Debezium captures MySQL changes and the CDC publisher forwards them to `mdm_customer` and `mdm_product`.
-- Kafka Connect sinks processed streams to Iceberg on MinIO and Postgres landing tables.
-- dbt models transform landing into bronze, silver, and gold warehouse layers.
-- Airflow schedules recurring dbt runs.
-- Argo CD reconciles Helm-based Kubernetes deployments; Grafana/Loki/Prometheus provide observability.
-
-Canonical architecture diagrams live in:
-
-- [docs/architecture_design.md](docs/architecture_design.md)
-
-## Operations Runbook
-
-Use the runbook for complete local procedures, including startup, validation, UI access, troubleshooting, and reset:
-
-- [docs/runbook.md](docs/runbook.md)
-
-Use the architecture design doc for the canonical system architecture, deployment components, and modern data platform patterns:
-
-- [docs/architecture_design.md](docs/architecture_design.md)
+- Architecture reference: [docs/architecture_design.md](docs/architecture_design.md)
+- Operations runbook: [docs/runbook.md](docs/runbook.md)
 
 ## Repository Layout
 
@@ -77,7 +53,9 @@ Use the architecture design doc for the canonical system architecture, deploymen
 - `docs/runbook.md`: Day-2 operations procedures for Compose and Argo CD workflows.
 - `docs/architecture_design.md`: Architecture diagrams and modern data engineering framework/patterns.
 
-## Quick Start: Docker Compose
+## Quick Start
+
+### Option A: Docker Compose
 
 Use one of these local startup paths depending on what you need.
 
@@ -93,16 +71,7 @@ Start only the core streaming path for a faster inner loop:
 docker compose up -d --build kafka topic-init kafka-ui producer processor
 ```
 
-Once the stack is running:
-
-- Kafka is exposed on `localhost:9094`
-- Kafka UI is exposed on `http://localhost:8080`
-- The producer writes composite order events into `raw_sales_orders`
-- The processor fans out records into `sales_order`, `sales_order_line_item`, and `customer_sales`
-- The MDM writer upserts master data into MySQL `mdm.customer360` and `mdm.product_master`
-- Debezium plus CDC publisher emits `mdm_customer` and `mdm_product`
-
-Inspect the Kafka topics from the running local stack:
+Validate topic flow:
 
 ```bash
 ./scripts/list-topics.sh
@@ -110,26 +79,28 @@ Inspect the Kafka topics from the running local stack:
 ./scripts/check-pipeline-topics.sh
 ```
 
-Start the downstream lakehouse + warehouse layer:
+Start lakehouse and warehouse layer:
 
 ```bash
 make lakehouse-up
 ```
 
-Start Airflow only:
-
-```bash
-make airflow-up
-```
-
-Run dbt transforms (`landing` -> `bronze` -> `silver` -> `gold`) in Postgres:
+Run dbt manually:
 
 ```bash
 make dbt-run
 ```
 
-Local endpoints for this layer:
+Start Airflow:
 
+```bash
+make airflow-up
+```
+
+Key local endpoints:
+
+- Kafka is exposed on `localhost:9094`
+- Kafka UI is exposed on `http://localhost:8080`
 - MinIO API: `http://localhost:9000`
 - MinIO Console: `http://localhost:9001`
 - Kafka Connect REST: `http://localhost:8083`
@@ -149,7 +120,7 @@ Expected container behavior:
 - `dbt` is also a one-shot service and normally ends in `Exited (0)` after `dbt run` completes.
 - A finished `dbt` container does not mean bronze, silver, or gold data is missing.
 
-## Quick Start: kind + Helm + Argo CD
+### Option B: kind + Helm + Argo CD
 
 Use this flow to run the dev environment on kind while building images locally with Docker.
 
@@ -171,25 +142,27 @@ Docker-equivalent one-command Helm stop:
 make routine-b-down
 ```
 
-1. Create a kind cluster and install Argo CD:
+Minimal path:
+
+1. Create kind cluster and install Argo CD:
 
    ```bash
    ./scripts/bootstrap-kind.sh
    ```
 
-2. Build producer, processor, connect, dbt, and airflow images locally and load them into kind:
+2. Build and load local images into kind:
 
    ```bash
    ./scripts/build-images.sh
    ```
 
-3. Apply the Argo CD dev application (if using Argo CD path):
+3. Apply Argo CD application (Argo workflow):
 
    ```bash
    kubectl apply -f argocd/dev.yaml
    ```
 
-4. Wait for Argo CD and the app to sync:
+4. Verify sync and workloads:
 
    ```bash
    kubectl -n argocd get pods
@@ -206,14 +179,14 @@ make routine-b-down
    make helm-health-dev
    ```
 
-5. Verify the Kafka pipeline in the dev namespace:
+5. Validate processor pipeline logs:
 
    ```bash
    kubectl -n realtime-dev get pods
    kubectl -n realtime-dev logs deploy/realtime-dev-realtime-app-processor --tail=100
    ```
 
-6. Verify the warehouse and scheduling layer in the dev namespace:
+6. Validate dbt and Airflow logs:
 
    ```bash
    kubectl -n realtime-dev get pods
@@ -223,7 +196,7 @@ make routine-b-down
    kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-minio 9001:9001
    ```
 
-7. Access local UIs and Postgres when running in kind:
+7. Port-forward local access:
 
    ```bash
    kubectl -n argocd port-forward svc/argocd-server 8443:443
@@ -318,7 +291,7 @@ Dev environment behavior:
 
 ## Data Validation
 
-Use these checks after the stack is up to verify each layer of the pipeline.
+Run these checks after startup to validate each pipeline layer.
 
 Verify Kafka topic fan-out:
 
