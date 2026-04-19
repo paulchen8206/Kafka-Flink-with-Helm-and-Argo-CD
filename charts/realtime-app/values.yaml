@@ -23,6 +23,20 @@ processor:
     customerSales: customer_sales
   consumerGroupId: realtime-flink-processor
   checkpointIntervalMs: 10000
+icebergWriter:
+  enabled: false
+  replicas: 1
+  image:
+    repository: realtime-sales-iceberg-writer
+    tag: 0.1.0
+    pullPolicy: IfNotPresent
+  groupId: iceberg-writer
+  offsetReset: earliest
+  batchSize: 50
+  pollTimeoutMs: 1000
+  flushIntervalMs: 5000
+  catalog: lakehouse
+  schema: streaming
 kafkaUi:
   enabled: false
   replicas: 1
@@ -50,6 +64,15 @@ minio:
     type: ClusterIP
     apiPort: 9000
     consolePort: 9001
+trino:
+  enabled: false
+  image:
+    repository: trinodb/trino
+    tag: "472"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
 postgres:
   enabled: false
   image:
@@ -230,21 +253,33 @@ kafka:
     - name: connect-configs
       partitions: 1
       replicationFactor: 1
+      config:
+        cleanup.policy: compact
     - name: connect-offsets
       partitions: 6
       replicationFactor: 1
+      config:
+        cleanup.policy: compact
     - name: connect-status
       partitions: 3
       replicationFactor: 1
+      config:
+        cleanup.policy: compact
     - name: connect-iceberg-control
       partitions: 3
       replicationFactor: 1
     - name: mdm-connect-configs
       partitions: 1
       replicationFactor: 1
+      config:
+        cleanup.policy: compact
     - name: mdm-connect-offsets
       partitions: 6
       replicationFactor: 1
+      config:
+        cleanup.policy: compact
     - name: mdm-connect-status
       partitions: 3
       replicationFactor: 1
+      config:
+        cleanup.policy: compact

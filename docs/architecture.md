@@ -1,13 +1,47 @@
-# Architecture Design
+# Architecture Reference
 
 This document is the canonical architecture reference for this project. It organizes the platform as a modern data architecture that combines batch and streaming, ELT modeling, lakehouse storage, and GitOps deployment automation.
+
+## Purpose
+
+This section defines the purpose of this document.
+Define the canonical architecture, principles, and technology choices for this platform.
+
+## Commands
+
+This section defines the primary commands for this document.
+Use the architecture-to-operations mapping in this document to choose the correct Make targets and deployment flows.
+
+## Validation
+
+This section defines the primary validation approach for this document.
+Use the validation-oriented sections and mapped operational checks to confirm architecture behavior in local environments.
+
+## Troubleshooting
+
+This section defines the primary troubleshooting approach for this document.
+Use architecture notes in this document to diagnose design-level issues, then use the runbook for step-by-step remediation.
+
+## References
+
+This section defines the primary cross-references for this document.
+
+- [../README.md](../README.md)
+- [runbook.md](runbook.md)
+- [adr/README.md](adr/README.md)
+
+## Documentation Map
+
+- Project entrypoint: [../README.md](../README.md)
+- Operations runbook: [runbook.md](runbook.md)
+- Architecture Decision Records (ADR): [adr/README.md](adr/README.md)
 
 ## 1. Purpose and Scope
 
 This platform demonstrates how to build a full-stack modern data system with these goals:
 
 - Capture and process real-time events with Kafka and Flink.
-- Persist data in a lakehouse pattern (Iceberg on object storage) and in an analytics warehouse pattern (Postgres used to mimic Snowflake-like warehouse behavior).
+- Persist data in a lakehouse pattern using S3-compatible object storage locally, with a path to true Iceberg tables and SQL querying, and in an analytics warehouse pattern (Postgres used to mimic Snowflake-like warehouse behavior).
 - Apply ELT transformations with dbt using medallion layers (bronze, silver, gold).
 - Incorporate dimensional modeling for analytics consumption.
 - Run services in containers (Docker) and orchestrate on Kubernetes.
@@ -43,7 +77,8 @@ Out of scope for this demo:
 | Realtime stream compute | Flink (embedded in Spring Boot processor) | Event decomposition and transformation |
 | Additional compute/sync | PySpark | MDM table synchronization to analytics landing |
 | Warehouse simulation | Postgres | Mimics Snowflake-style SQL analytics target for local development |
-| Lakehouse storage | Iceberg tables on MinIO | Open table format on object storage |
+| Lakehouse storage | MinIO | Local S3-compatible object storage for lakehouse data |
+| Query engine | Trino | Interactive SQL layer for Iceberg-compatible tables on MinIO |
 | Cloud warehouse/lakehouse targets (optional) | Redshift / Snowflake / BigQuery / Databricks | Production-grade alternatives using the same ELT and dimensional-modeling patterns |
 | ELT modeling | dbt | Bronze/silver/gold SQL transformations and dimensional model materialization |
 | CDC for master data | Debezium + MySQL | Capture and stream row-level changes |
@@ -58,6 +93,12 @@ MinIO portability note:
 
 - MinIO is the local S3-compatible object storage layer in this project.
 - For cloud migration, replace MinIO with Amazon S3 (AWS), Google Cloud Storage (GCP), or Azure Data Lake Storage Gen2 (Azure).
+
+Current state note:
+
+- The current Kafka Connect path writes raw JSON objects to MinIO through the S3 sink connector.
+- Trino is added as the query engine foundation, and this repository now includes a Trino-managed path to create real Iceberg tables on MinIO from Postgres landing data.
+- This repository also includes a direct Kafka-to-Iceberg writer path that consumes streaming topics and writes Iceberg tables through Trino.
 
 ### 3.1 Concrete Migration Matrix (Connectors + dbt + Config)
 
@@ -76,6 +117,11 @@ Recommended migration workflow:
 2. Switch connector layer and warehouse credentials by environment values.
 3. Switch dbt adapter + profile target and run `dbt deps` and `dbt run` in lower environment.
 4. Validate row counts and key dimensions/facts parity before promoting.
+
+Local Trino materialization note:
+
+- In this repository, real Iceberg tables can be created immediately by Trino from the existing Postgres `landing` schema.
+- This is a pragmatic local bridge that now coexists with a direct Kafka-to-Iceberg writer path.
 
 ### 3.2 Sample dbt Profile Templates by Platform
 
@@ -242,6 +288,7 @@ flowchart LR
     IO[(MinIO + Iceberg)]
     PG[(Postgres Landing + Analytics)]
     SP[PySpark MDM Sync]
+    TQ[Trino Query Engine]
     DBT[dbt Medallion + Dimensional Models]
     AF[Airflow Scheduler]
     K --> KC
@@ -250,6 +297,7 @@ flowchart LR
     MY --> SP
     SP --> PG
     PG --> DBT
+    TQ --> IO
     AF --> DBT
   end
 
@@ -272,10 +320,10 @@ flowchart LR
    - `sales_order`
    - `sales_order_line_item`
    - `customer_sales`
-3. Kafka Connect sinks these streams to:
-   - Iceberg tables in MinIO (lakehouse storage)
-   - Postgres `landing` schema tables (warehouse-style landing)
-4. dbt models build medallion layers and dimensional outputs in Postgres.
+3. Kafka Connect sinks these streams to raw JSON objects in MinIO and to Postgres `landing` schema tables.
+4. Trino can materialize and query MinIO-backed Iceberg tables from the Postgres `landing` schema.
+5. A direct Kafka-to-Iceberg writer can populate `lakehouse.streaming` tables without the Postgres bridge.
+6. dbt models build medallion layers and dimensional outputs in Postgres.
 
 ### 5.2 Master Data (MDM) Flow
 
@@ -328,7 +376,7 @@ Modeling benefits:
 ### 8.1 Local Development Runtime (Docker Compose)
 
 - Primary objective: rapid local feedback loop.
-- Includes producer, processor, Kafka, Kafka Connect, MDM services, MinIO, Postgres, dbt bootstrap job, and Airflow.
+- Includes producer, processor, Kafka, Kafka Connect, MinIO, Trino, MDM services, Postgres, dbt bootstrap job, and Airflow.
 - One-shot init jobs (topic init, connector registration, bucket creation, dbt run) support idempotent startup.
 
 ### 8.2 Kubernetes Runtime (kind + Helm + Argo CD)
@@ -337,6 +385,7 @@ Modeling benefits:
 - Helm chart templates the full application stack.
 - Argo CD continuously syncs desired state from Git.
 - Environment values (`dev`, `qa`, `prd`) drive differences such as image references, broker endpoints, and scaling.
+- Trino can be enabled as the lakehouse SQL endpoint for MinIO-backed Iceberg-compatible datasets.
 
 ### 8.3 Cloud Kubernetes Migration Candidates
 
@@ -358,6 +407,29 @@ Cloud migration checklist:
 2. Move credentials from local env files to cloud secret managers.
 3. Parameterize Helm values per cloud environment and keep Argo CD as reconciliation layer.
 4. Re-run migration matrix validation (connector + dbt adapter + parity checks) before production cutover.
+
+### 8.4 Make Target Map (Architecture to Operations)
+
+Use this quick map to connect architecture responsibilities in this document to executable commands in [docs/runbook.md](docs/runbook.md) and [Makefile](../Makefile).
+
+| Architecture responsibility | Primary routine | Make target(s) |
+| --- | --- | --- |
+| Bring up local runtime services | Routine A (Docker Compose) | `make up`, `make lakehouse-up` |
+| Validate realtime and lakehouse data flow | Routine A (Docker Compose) | `make topics-check`, `make iceberg-streaming-smoke` |
+| Run ELT transformations | Routine A (Docker Compose) | `make dbt-run`, `make verify-warehouse`, `make verify-dbt-relations` |
+| Operate Airflow-driven dbt scheduling | Routine A (Docker Compose) | `make airflow-up`, `make airflow-trigger-dbt-dag`, `make airflow-dbt-reboot` |
+| Run day-2 unified local operations | Routine A (Docker Compose) | `make routine-a-ops` |
+| Bootstrap GitOps-style local cluster | Routine B (kind + Helm + Argo CD) | `make routine-b`, `make routine-b-argocd` |
+| Recover missing Argo CD app object | Routine B (kind + Helm + Argo CD) | `kubectl apply -f argocd/dev.yaml`, `kubectl -n argocd get application realtime-dev` |
+| Run day-2 unified cluster operations | Routine B (kind + Helm + Argo CD) | `make routine-b-ops` |
+| Validate cluster health and app rollout | Routine B (kind + Helm + Argo CD) | `make ops-status-dev`, `make helm-health-dev`, `make airflow-dbt-check-dev`, `make mdm-topics-check-dev`, `make trino-smoke-dev`, `make iceberg-streaming-smoke-dev` |
+| Access cluster web operational surfaces | Routine B (kind + Helm + Argo CD) | `kubectl -n argocd port-forward svc/argocd-server 8443:443`, `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-kafka-ui 8082:8080`, `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-grafana 3001:3000`, `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-airflow 8084:8080`, `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-minio 9001:9001`, `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-trino 8086:8080` |
+
+Cross-reference note:
+
+- Architecture rationale stays in this document.
+- Step-by-step operator procedure stays in [docs/runbook.md](docs/runbook.md).
+- Command implementation source of truth stays in [Makefile](../Makefile).
 
 ## 9. CI/CD and GitOps Design
 
@@ -403,7 +475,7 @@ Current local setup favors simplicity. Production hardening should include:
 - Postgres is intentionally used as a local warehouse analog to mimic Snowflake-like SQL analytics workflows.
 - The same architecture can target Redshift, Snowflake, BigQuery, or Databricks with adapter/profile and sink-integration changes rather than full redesign.
 - Kafka plus Flink provides real-time event decomposition and processing.
-- Iceberg on MinIO demonstrates open lakehouse storage patterns.
+- MinIO plus Trino now supports both a Trino-managed bridge from Postgres landing and a direct Kafka-to-Iceberg writer path for realtime lakehouse ingestion.
 - dbt enforces ELT and medallion layer conventions with version-controlled SQL models.
 - PySpark and Debezium integrate master data and CDC into analytical flows.
 - Docker/Compose supports local speed; Kubernetes/Helm/Argo CD supports GitOps reproducibility.

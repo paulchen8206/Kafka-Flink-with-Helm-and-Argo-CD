@@ -13,9 +13,20 @@ processor:
     tag: 0.1.0
     pullPolicy: Never
   consumerGroupId: realtime-flink-processor-dev
+icebergWriter:
+  enabled: true
+  batchSize: 50
+  pollTimeoutMs: 1000
+  flushIntervalMs: 5000
+  image:
+    repository: realtime-sales-iceberg-writer
+    tag: 0.1.0
+    pullPolicy: Never
 kafkaUi:
   enabled: true
 minio:
+  enabled: true
+trino:
   enabled: true
 postgres:
   enabled: true

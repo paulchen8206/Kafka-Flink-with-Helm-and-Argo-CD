@@ -1,0 +1,18 @@
+[project]
+name = "iceberg-writer"
+version = "0.1.0"
+description = "Consumes Kafka topics and writes directly to Iceberg tables through Trino"
+requires-python = ">=3.11"
+dependencies = [
+    "kafka-python==2.0.2",
+]
+
+[project.scripts]
+iceberg-writer = "app.main:main"
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

@@ -82,3 +82,24 @@ create table if not exists landing.mdm_date (
 	created_at timestamptz,
 	updated_at timestamptz
 );
+
+create table if not exists iceberg_tables (
+	catalog_name varchar(255) not null,
+	table_namespace varchar(255) not null,
+	table_name varchar(255) not null,
+	metadata_location varchar(1000),
+	previous_metadata_location varchar(1000),
+	iceberg_type varchar(5),
+	primary key (catalog_name, table_namespace, table_name)
+);
+
+alter table if exists iceberg_tables
+	add column if not exists iceberg_type varchar(5);
+
+create table if not exists iceberg_namespace_properties (
+	catalog_name varchar(255) not null,
+	namespace varchar(255) not null,
+	property_key varchar(255) not null,
+	property_value varchar(1000),
+	primary key (catalog_name, namespace, property_key)
+);

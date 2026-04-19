@@ -141,3 +141,50 @@ spec:
       port: 8080
       targetPort: 8080
 {{- end }}
+{{- if .Values.icebergWriter.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "realtime-app.fullname" . }}-iceberg-writer
+  labels:
+    app.kubernetes.io/name: {{ include "realtime-app.name" . }}
+    app.kubernetes.io/component: iceberg-writer
+spec:
+  replicas: {{ .Values.icebergWriter.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "realtime-app.name" . }}
+      app.kubernetes.io/component: iceberg-writer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "realtime-app.name" . }}
+        app.kubernetes.io/component: iceberg-writer
+    spec:
+      containers:
+        - name: iceberg-writer
+          image: {{ .Values.icebergWriter.image.repository }}:{{ .Values.icebergWriter.image.tag }}
+          imagePullPolicy: {{ .Values.icebergWriter.image.pullPolicy }}
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ .Values.kafkaBootstrapServers | quote }}
+            - name: ICEBERG_WRITER_GROUP_ID
+              value: {{ .Values.icebergWriter.groupId | quote }}
+            - name: ICEBERG_WRITER_OFFSET_RESET
+              value: {{ .Values.icebergWriter.offsetReset | quote }}
+            - name: ICEBERG_WRITER_BATCH_SIZE
+              value: {{ .Values.icebergWriter.batchSize | quote }}
+            - name: ICEBERG_WRITER_POLL_TIMEOUT_MS
+              value: {{ .Values.icebergWriter.pollTimeoutMs | quote }}
+            - name: ICEBERG_WRITER_FLUSH_INTERVAL_MS
+              value: {{ .Values.icebergWriter.flushIntervalMs | quote }}
+            - name: TRINO_URL
+              value: http://{{ include "realtime-app.fullname" . }}-trino:8080
+            - name: TRINO_USER
+              value: analytics
+            - name: ICEBERG_CATALOG
+              value: {{ .Values.icebergWriter.catalog | quote }}
+            - name: ICEBERG_SCHEMA
+              value: {{ .Values.icebergWriter.schema | quote }}
+{{- end }}

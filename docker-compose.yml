@@ -94,6 +94,42 @@ services:
     volumes:
       - ./scripts/init-minio.sh:/scripts/init-minio.sh:ro
 
+  trino:
+    image: trinodb/trino:472
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_started
+    ports:
+      - "8086:8080"
+    volumes:
+      - ./trino/etc/config.properties:/etc/trino/config.properties:ro
+      - ./trino/etc/node.properties:/etc/trino/node.properties:ro
+      - ./trino/etc/jvm.config:/etc/trino/jvm.config:ro
+      - ./trino/etc/catalog:/etc/trino/catalog:ro
+
+  iceberg-writer:
+    build:
+      context: ./iceberg-writer
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+      trino:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      ICEBERG_WRITER_GROUP_ID: iceberg-writer
+      ICEBERG_WRITER_OFFSET_RESET: earliest
+      ICEBERG_WRITER_BATCH_SIZE: 50
+      ICEBERG_WRITER_POLL_TIMEOUT_MS: 1000
+      ICEBERG_WRITER_FLUSH_INTERVAL_MS: 5000
+      TRINO_URL: http://trino:8080
+      TRINO_USER: analytics
+      ICEBERG_CATALOG: lakehouse
+      ICEBERG_SCHEMA: streaming
+    restart: on-failure
+
   postgres:
     image: postgres:16
     ports:
