@@ -25,7 +25,7 @@ PHONY_SHARED := help validate build
 PHONY_ROUTINE_A := \
 	routine-a routine-a-ops up down topics-create topics-list topics-check consume \
 	lakehouse-up lakehouse-down jdbc-metastore-migrate airflow-up airflow-logs \
-	airflow-trigger-dbt-dag airflow-dbt-reboot kafka-ui-up dbt-stop ops-status \
+	airflow-trigger-dbt-dag airflow-dbt-reboot airflow-dbt-check kafka-ui-up dbt-stop ops-status routine-a-observe \
 	mdm-up mdm-topics-check dbt-run verify-warehouse verify-dbt-relations \
 	trino-smoke trino-query trino-shell trino-seed-demo trino-bootstrap-lakehouse \
 	trino-rebuild-lakehouse trino-sync-lakehouse trino-sample-queries \
@@ -136,7 +136,29 @@ dbt-stop: ## [A]  Ensure dbt is not running
 	docker compose ps dbt
 
 ops-status: ## [A]  Show key runtime status for kafka-ui, airflow, and dbt
-	docker compose ps kafka-ui airflow dbt
+	@echo "[ops-status] docker compose service status"
+	docker compose ps
+	@echo ""
+	@echo "[ops-status] one-shot/init container status (expected: Exited (0) when successful)"
+	docker compose ps -a topic-init minio-init connect-init mdm-connect-init dbt || true
+	@echo ""
+	@echo "[ops-status] endpoint checks"
+	@curl -fsS http://localhost:8086/v1/info >/dev/null && echo "trino: healthy" || echo "trino: unavailable"
+	@curl -fsS http://localhost:8083/connectors >/dev/null && echo "connect: healthy" || echo "connect: unavailable"
+	@curl -fsS http://localhost:8085/connectors >/dev/null && echo "mdm-connect: healthy" || echo "mdm-connect: unavailable"
+	@curl -fsS http://localhost:8084/health >/dev/null && echo "airflow: healthy" || echo "airflow: unavailable"
+	@curl -fsS http://localhost:9090/-/ready >/dev/null && echo "prometheus: healthy" || echo "prometheus: unavailable"
+	@curl -fsS http://localhost:9115/metrics >/dev/null && echo "blackbox-exporter: healthy" || echo "blackbox-exporter: unavailable"
+	@curl -fsS http://localhost:3000/api/health >/dev/null && echo "grafana: healthy" || echo "grafana: unavailable"
+
+routine-a-observe: ## [A]  Run full Docker observability sweep (ops-status + airflow/dbt check + trino smoke)
+	$(MAKE) ops-status
+	$(MAKE) airflow-dbt-check
+	$(MAKE) trino-smoke
+
+airflow-dbt-check: ## [A]  Validate Airflow + dbt runtime status/logs in Docker Compose
+	docker compose ps -a airflow dbt
+	docker compose logs --tail=60 airflow dbt || true
 
 mdm-up: ## [A]  Start MDM CDC pipeline services
 	docker compose up -d mysql-mdm mdm-writer mdm-connect mdm-connect-init mdm-cdc-producer
