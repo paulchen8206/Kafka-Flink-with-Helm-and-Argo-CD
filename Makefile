@@ -36,7 +36,7 @@ PHONY_ROUTINE_B := \
 	mdm-topics-check-dev airflow-dbt-check-dev iceberg-streaming-smoke-dev \
 	trino-smoke-dev docker-build kind-load images kind-bootstrap argocd-apply \
 	helm-deps helm-lint helm-render-dev helm-render-qa helm-render-prd helm-render \
-	helm-reboot-dev helm-health-dev
+	helm-reboot-dev helm-health-dev helm-metastore-migrate-dev
 
 PHONY_TARGETS := $(PHONY_SHARED) $(PHONY_ROUTINE_A) $(PHONY_ROUTINE_B)
 
@@ -90,6 +90,7 @@ routine-a-ops: ## [A]  Unified ops runbook: kafka-ui up, dbt off, MDM checks, ai
 	$(MAKE) ops-status
 
 up: ## [A]  Start local docker-compose stack
+	chmod +x scripts/*.sh
 	./scripts/compose-up.sh -d
 
 down: ## [A]  Stop local docker-compose stack
@@ -288,3 +289,12 @@ helm-health-dev: ## [B]  Show dev Helm workload health snapshot (pods, jobs, dbt
 	kubectl -n realtime-dev get pods
 	kubectl -n realtime-dev get jobs
 	kubectl -n realtime-dev logs job/realtime-dev-realtime-app-dbt --tail=60 || true
+
+helm-metastore-migrate-dev: ## [B]  Bootstrap Iceberg JDBC V1 schema in dev k8s Postgres and restart Trino + iceberg-writer
+	kubectl -n realtime-dev exec deploy/realtime-dev-realtime-app-postgres -- psql -U analytics -d analytics -c \
+	  "CREATE TABLE IF NOT EXISTS iceberg_tables (catalog_name VARCHAR(255) NOT NULL, table_namespace VARCHAR(255) NOT NULL, table_name VARCHAR(255) NOT NULL, metadata_location VARCHAR(32768), previous_metadata_location VARCHAR(32768), iceberg_type VARCHAR(5), CONSTRAINT iceberg_tables_pk PRIMARY KEY (catalog_name, table_namespace, table_name));"
+	kubectl -n realtime-dev exec deploy/realtime-dev-realtime-app-postgres -- psql -U analytics -d analytics -c \
+	  "CREATE TABLE IF NOT EXISTS iceberg_namespace_properties (catalog_name VARCHAR(255) NOT NULL, namespace VARCHAR(255) NOT NULL, property_key VARCHAR(255), property_value VARCHAR(1000), CONSTRAINT iceberg_namespace_properties_pk PRIMARY KEY (catalog_name, namespace, property_key));"
+	kubectl -n realtime-dev rollout restart deploy/realtime-dev-realtime-app-trino deploy/realtime-dev-realtime-app-iceberg-writer
+	kubectl -n realtime-dev rollout status deploy/realtime-dev-realtime-app-trino --timeout=120s
+	kubectl -n realtime-dev rollout status deploy/realtime-dev-realtime-app-iceberg-writer --timeout=120s

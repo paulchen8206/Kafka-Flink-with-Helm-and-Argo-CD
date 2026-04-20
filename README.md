@@ -384,7 +384,7 @@ Dev environment behavior:
 - Uses in-cluster Kafka from the Helm dependency (`kafka.enabled=true` in `environments/dev/values.yaml`).
 - Uses locally built producer, processor, Kafka Connect, dbt, and Airflow images already loaded into kind (`imagePullPolicy: Never`).
 - Deploys MinIO, Trino, Postgres, Kafka Connect, a one-shot dbt bootstrap Job, and Airflow in the same Helm release.
-- Argo CD tracks `https://github.com/paulchen8206/Kafka-Flink-with-Helm-and-Argo-CD.git` on branch `main` and syncs `charts/realtime-app` with `environments/dev/values.yaml`.
+- Argo CD tracks `https://github.com/paulchen8206/Full-Stack-Modern-Data-Architecture-and-Engineering.git` on branch `main` and syncs `charts/realtime-app` with `environments/dev/values.yaml`.
 
 ## Environment Strategy
 
@@ -539,7 +539,7 @@ make airflow-trigger-dbt-dag
 
 `make dbt-run` uses `docker compose run --rm dbt`, so Compose may briefly wait on dependencies before the dbt command starts.
 
-## Validation Snapshot (2026-04-18)
+## Validation Snapshot (2026-04-20)
 
 The following checks were validated against the current workspace and local dev cluster state.
 
@@ -549,7 +549,16 @@ Static validation:
 - `helm dependency build charts/realtime-app` completed successfully.
 - `helm template realtime-dev charts/realtime-app -f environments/dev/values.yaml` rendered successfully.
 
-Runtime validation (Routine B cluster):
+Runtime validation (Routine A — Docker Compose):
+
+- `make routine-a` completed successfully. All containers Running or Exited (0).
+- `make verify-warehouse` confirmed row counts: `landing_sales_order=1097`, `landing_customer_sales=1097`, `bronze_sales_order=1097`, `silver_fact_sales_order=2528`, `gold_customer_sales_summary=980`.
+- `make trino-smoke` passed: Trino coordinator healthy (`uptime` reported, `starting=false`).
+- `make iceberg-streaming-smoke` passed: `sales_order`, `sales_order_line_item`, `customer_sales` all had non-zero row counts in `lakehouse.streaming`.
+- `make mdm-topics-check` consumed records from `mdm_customer` and `mdm_product`.
+- Airflow UI reachable at `http://localhost:8084` after `make airflow-up`.
+
+Runtime validation (Routine B cluster — 2026-04-18):
 
 - `kubectl -n argocd get application realtime-dev` reported `SYNC=Synced`, `HEALTH=Healthy`.
 - `make routine-b-ops` completed successfully end-to-end.

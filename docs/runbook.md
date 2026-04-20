@@ -90,6 +90,7 @@ Documentation map:
 | kind + Helm + Argo CD | Validate app and workloads | `kubectl -n argocd get application realtime-dev && kubectl -n realtime-dev get pods` |
 | kind + Helm + Argo CD | Reboot from local Helm | `make helm-reboot-dev` |
 | kind + Helm + Argo CD | Helm health snapshot | `make helm-health-dev` |
+| kind + Helm + Argo CD | Bootstrap Iceberg JDBC schema in k8s Postgres | `make helm-metastore-migrate-dev` |
 | kind + Helm + Argo CD | Runtime status snapshot | `make ops-status-dev` |
 | kind + Helm + Argo CD | Validate MDM topic flow | `make mdm-topics-check-dev` |
 | kind + Helm + Argo CD | Validate Airflow + dbt state | `make airflow-dbt-check-dev` |
@@ -124,6 +125,14 @@ Documentation map:
 Architecture-to-command map:
 
 - See [Make Target Map (Architecture to Operations)](architecture.md#84-make-target-map-architecture-to-operations) for the rationale-to-target mapping used by this routine.
+
+First-time prerequisite (fresh clone or after checking out on a new machine):
+
+```bash
+chmod +x scripts/*.sh
+```
+
+Note: `make routine-a` (via the `up` target) also runs this automatically, so a manual pre-step is only needed if you call the scripts directly before running any Make target.
 
 ```bash
 make routine-a
@@ -348,22 +357,30 @@ If you use the volume reset, Postgres landing, bronze, silver, and gold data wil
   Compose may still be waiting for `connect-init` or `postgres` before launching the dbt container.
 - Airflow UI starts but no dbt runs appear:
   Check `make airflow-logs` and verify the `dbt_warehouse_schedule` DAG is enabled.
+- Airflow webserver fails to start with `Error: Already running on PID ... (or pid file ... is stale)`:
+  A stale PID file from a previous container restart is blocking the webserver. Fix with:
+  ```bash
+  docker compose exec airflow rm -f /opt/airflow/airflow-webserver.pid && docker compose restart airflow
+  ```
+  Then check `docker compose logs --tail=20 airflow` and confirm `Listening at: http://0.0.0.0:8080`.
 
 ## Routine B: kind + Helm + Argo CD
 
-### B1. Bootstrap kind and Argo CD
+### B1. Preferred bootstrap (one command)
+
+Use this as the default Routine B entrypoint:
 
 ```bash
-./scripts/bootstrap-kind.sh
+make routine-b
 ```
 
-Wait until Argo CD pods are Ready:
+What it does:
 
-```bash
-kubectl -n argocd get pods
-```
+- Creates the kind cluster and installs Argo CD (`make kind-bootstrap`)
+- Builds and loads all local app images into kind (`make images`)
+- Deploys the dev stack with local Helm values (`make helm-reboot-dev`)
 
-When the dev stack is deployed, validate Trino with:
+Validate Trino after bootstrap:
 
 ```bash
 make trino-smoke-dev
@@ -371,17 +388,49 @@ kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-trino 8086:80
 curl -fsS http://localhost:8086/v1/info
 ```
 
-### B2. Build and load app images into kind
+### B2. Manual bootstrap (equivalent step-by-step)
+
+Use this only when you want to run each phase independently.
+
+1. Bootstrap kind and Argo CD:
+
+```bash
+./scripts/bootstrap-kind.sh
+```
+
+2. Wait until Argo CD pods are Ready:
+
+```bash
+kubectl -n argocd get pods
+```
+
+3. Build and load app images into kind:
 
 ```bash
 ./scripts/build-images.sh
 ```
 
-Bootstrap local cluster (Docker-like one command):
+4. Deploy via local Helm:
 
 ```bash
-make routine-b
+make helm-reboot-dev
 ```
+
+5. Validate Trino:
+
+```bash
+make trino-smoke-dev
+kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-trino 8086:8080
+curl -fsS http://localhost:8086/v1/info
+```
+
+Important image prerequisite:
+
+- `make helm-reboot-dev` requires local service images to already exist in the kind node.
+- If pods show `ErrImageNeverPull`, run `make images` and then rerun `make helm-reboot-dev`.
+- If `iceberg-writer` enters `CrashLoopBackOff` after a fresh deploy, the Iceberg JDBC metastore schema was not yet initialized in Postgres. Fix it with `make helm-metastore-migrate-dev`, which creates the required `iceberg_tables` and `iceberg_namespace_properties` tables and restarts Trino and `iceberg-writer`.
+
+### B3. Day-2 operations and shutdown
 
 Stop local cluster workloads:
 
@@ -389,7 +438,7 @@ Stop local cluster workloads:
 make routine-b-down
 ```
 
-This mirrors the Docker `make routine-a` experience by performing cluster bootstrap, image build/load, and Helm deploy in one flow.
+The one-command bootstrap in B1 mirrors the Docker `make routine-a` experience by performing cluster bootstrap, image build/load, and Helm deploy in one flow.
 
 Run unified day-2 operations (Docker-path parity):
 
@@ -399,7 +448,9 @@ make routine-b-ops
 
 This mirrors the Docker `make routine-a-ops` flow with Kubernetes-native checks for status, MDM topics, Airflow/dbt state, and Trino/Iceberg smoke.
 
-### B3. Deploy application through Argo CD
+### B4. Optional Argo CD deployment mode
+
+Choose this mode if you want Argo CD to manage the `realtime-dev` app object directly instead of local Helm reconciliation.
 
 ```bash
 kubectl apply -f argocd/dev.yaml
@@ -426,7 +477,7 @@ kubectl -n argocd get application realtime-dev
 kubectl -n realtime-dev get pods
 ```
 
-### B4. Access web UIs
+### B5. Access web UIs
 
 Use the same UI access order as the README Quick Start section.
 
@@ -488,7 +539,7 @@ kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-trino 8086:80
 
 - URL: `http://localhost:8086`
 
-### B5. Validate pipeline topics in cluster
+### B6. Validate pipeline topics in cluster
 
 ```bash
 kubectl -n realtime-dev exec realtime-dev-kafka-controller-0 -- \
@@ -509,7 +560,7 @@ Repeat the consumer command for:
 - mdm_customer
 - mdm_product
 
-### B6. Resync and full reset
+### B7. Resync and full reset
 
 Force refresh app object:
 
@@ -539,13 +590,21 @@ kubectl delete namespace realtime-dev --ignore-not-found
 make routine-b
 ```
 
-### B7. Helm Lakehouse and Airflow health checks
+### B8. Helm Lakehouse and Airflow health checks
 
 Reboot the dev environment from the local Helm chart and values:
 
 ```bash
 make helm-reboot-dev
 ```
+
+If `iceberg-writer` enters `CrashLoopBackOff` after a fresh Helm deploy (Iceberg JDBC metastore tables not yet created in Postgres), run:
+
+```bash
+make helm-metastore-migrate-dev
+```
+
+This creates `iceberg_tables` and `iceberg_namespace_properties` with the V1 schema and rolls out Trino and `iceberg-writer`.
 
 Run the health snapshot independently:
 
@@ -583,7 +642,7 @@ Argo CD source note:
 
 - Argo CD syncs what is committed in the configured Git repo/branch.
 - Local uncommitted chart edits are validated by direct Helm commands (`make helm-reboot-dev`) but are not synced by Argo CD until pushed.
-- If app status shows `ComparisonError` and `SYNC STATUS: Unknown` with repository auth errors, add repository credentials to Argo CD for `https://github.com/paulchen8206/Kafka-Flink-with-Helm-and-Argo-CD.git`.
+- If app status shows `ComparisonError` and `SYNC STATUS: Unknown` with repository auth errors, add repository credentials to Argo CD for `https://github.com/paulchen8206/Full-Stack-Modern-Data-Architecture-and-Engineering.git`.
 - If app status is `Healthy` but `OutOfSync`, treat Git as source of truth and sync the app before trusting runtime drift-sensitive checks.
 
 ## Routine C: QA/PRD GitOps to Cloud Kubernetes (AWS, GCP, Azure)

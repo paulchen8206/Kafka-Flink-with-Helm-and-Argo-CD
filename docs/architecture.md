@@ -426,6 +426,7 @@ Use this quick map to connect architecture responsibilities in this document to 
 | Recover missing Argo CD app object | Routine B (kind + Helm + Argo CD) | `kubectl apply -f argocd/dev.yaml`, `kubectl -n argocd get application realtime-dev` |
 | Run day-2 unified cluster operations | Routine B (kind + Helm + Argo CD) | `make routine-b-ops` |
 | Validate cluster health and app rollout | Routine B (kind + Helm + Argo CD) | `make ops-status-dev`, `make helm-health-dev`, `make airflow-dbt-check-dev`, `make mdm-topics-check-dev`, `make trino-smoke-dev`, `make iceberg-streaming-smoke-dev` |
+| Bootstrap Iceberg JDBC V1 metastore schema in k8s Postgres | Routine B (kind + Helm + Argo CD) | `make helm-metastore-migrate-dev` |
 | Access cluster web operational surfaces | Routine B (kind + Helm + Argo CD) | `kubectl -n argocd port-forward svc/argocd-server 8443:443`, `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-kafka-ui 8082:8080`, `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-grafana 3001:3000`, `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-airflow 8084:8080`, `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-minio 9001:9001`, `kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-trino 8086:8080` |
 
 Cross-reference note:
