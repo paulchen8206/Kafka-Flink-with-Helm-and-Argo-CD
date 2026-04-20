@@ -16,17 +16,52 @@ MESSAGE_COUNT   ?= 5
 TRINO_URL       ?= http://localhost:8086
 SQL_FILE        ?=
 
+# ── Defaults ─────────────────────────────────────────────────────────────────
+.DEFAULT_GOAL := help
+
+# ── Target groups ─────────────────────────────────────────────────────────────
+PHONY_SHARED := help validate build
+
+PHONY_ROUTINE_A := \
+	routine-a routine-a-ops up down topics-create topics-list topics-check consume \
+	lakehouse-up lakehouse-down jdbc-metastore-migrate airflow-up airflow-logs \
+	airflow-trigger-dbt-dag airflow-dbt-reboot kafka-ui-up dbt-stop ops-status \
+	mdm-up mdm-topics-check dbt-run verify-warehouse verify-dbt-relations \
+	trino-smoke trino-query trino-shell trino-seed-demo trino-bootstrap-lakehouse \
+	trino-rebuild-lakehouse trino-sync-lakehouse trino-sample-queries \
+	iceberg-streaming-smoke
+
+PHONY_ROUTINE_B := \
+	routine-b routine-b-ops routine-b-down routine-b-argocd ops-status-dev \
+	mdm-topics-check-dev airflow-dbt-check-dev iceberg-streaming-smoke-dev \
+	trino-smoke-dev docker-build kind-load images kind-bootstrap argocd-apply \
+	helm-deps helm-lint helm-render-dev helm-render-qa helm-render-prd helm-render \
+	helm-reboot-dev helm-health-dev
+
+PHONY_TARGETS := $(PHONY_SHARED) $(PHONY_ROUTINE_A) $(PHONY_ROUTINE_B)
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+define require-var
+	@if [ -z "$($(1))" ]; then \
+		echo "Usage: make $(2) $(1)=<$(3)>" >&2; \
+		exit 1; \
+	fi
+endef
+
+define run-trino-file
+	python3 scripts/trino_query.py --server "$(TRINO_URL)" --file $(1)
+endef
+
+define build-image
+	docker build -t "$($(1))" $(2)
+endef
+
+define kind-load-image
+	kind load docker-image --name "$(CLUSTER_NAME)" "$($(1))"
+endef
+
 # ── Phony targets ─────────────────────────────────────────────────────────────
-.PHONY: help validate \
-        build \
-	routine-a up down topics-create topics-list topics-check consume \
-	routine-a-ops \
-	lakehouse-up lakehouse-down jdbc-metastore-migrate airflow-up airflow-logs airflow-trigger-dbt-dag airflow-dbt-reboot \
-	kafka-ui-up dbt-stop ops-status mdm-up mdm-topics-check \
-	dbt-run verify-warehouse verify-dbt-relations trino-smoke trino-query trino-shell trino-seed-demo trino-bootstrap-lakehouse trino-rebuild-lakehouse trino-sync-lakehouse trino-sample-queries iceberg-streaming-smoke iceberg-streaming-smoke-dev trino-smoke-dev \
-		routine-b routine-b-ops routine-b-down routine-b-argocd ops-status-dev mdm-topics-check-dev airflow-dbt-check-dev docker-build kind-load images kind-bootstrap argocd-apply \
-          helm-deps helm-lint helm-render-dev helm-render-qa helm-render-prd helm-render \
-	  helm-reboot-dev helm-health-dev
+.PHONY: $(PHONY_TARGETS)
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help: ## Show this help
@@ -70,7 +105,7 @@ topics-check: ## [A]  Sample messages from every pipeline topic  [scripts/check-
 	MESSAGE_COUNT="$(MESSAGE_COUNT)" ./scripts/check-pipeline-topics.sh
 
 consume: ## [A]  Consume TOPIC (make consume TOPIC=raw_sales_orders)  [scripts/consume-topic.sh]
-	@if [ -z "$(TOPIC)" ]; then echo "Usage: make consume TOPIC=<topic-name>" >&2; exit 1; fi
+	$(call require-var,TOPIC,consume,topic-name)
 	KAFKA_BOOTSTRAP_SERVERS="$(KAFKA_BOOTSTRAP)" ./scripts/consume-topic.sh "$(TOPIC)" "$(MESSAGE_COUNT)"
 
 lakehouse-up: ## [A]  Start Kafka Connect + MinIO + Postgres + dbt layer
@@ -130,28 +165,28 @@ trino-smoke: ## [A]  Check local Trino coordinator health
 	curl -fsS http://localhost:8086/v1/info
 
 trino-query: ## [A]  Run a SQL file through local Trino (make trino-query SQL_FILE=trino/sql/sample_queries.sql)
-	@if [ -z "$(SQL_FILE)" ]; then echo "Usage: make trino-query SQL_FILE=<path-to-sql-file>" >&2; exit 1; fi
-	python3 scripts/trino_query.py --server "$(TRINO_URL)" --file "$(SQL_FILE)"
+	$(call require-var,SQL_FILE,trino-query,path-to-sql-file)
+	$(call run-trino-file,"$(SQL_FILE)")
 
 trino-shell: ## [A]  Open a Trino CLI shell or run ad hoc SQL (make trino-shell SQL_FILE=trino/sql/sample_queries.sql)
 	@if [ -n "$(SQL_FILE)" ]; then TRINO_SCHEMA=streaming ./scripts/trino-sql.sh "$(SQL_FILE)"; else TRINO_SCHEMA=streaming ./scripts/trino-sql.sh; fi
 
 trino-seed-demo: ## [A]  Create a small demo Iceberg dataset on MinIO through Trino
-	python3 scripts/trino_query.py --server "$(TRINO_URL)" --file trino/sql/bootstrap_demo_seed.sql
+	$(call run-trino-file,trino/sql/bootstrap_demo_seed.sql)
 
 trino-bootstrap-lakehouse: ## [A]  Materialize Iceberg tables on MinIO from Postgres landing data through Trino
-	python3 scripts/trino_query.py --server "$(TRINO_URL)" --file trino/sql/bootstrap_lakehouse.sql
+	$(call run-trino-file,trino/sql/bootstrap_lakehouse.sql)
 
 trino-rebuild-lakehouse: ## [A]  Drop and recreate all demo Iceberg tables in one command
 	$(MAKE) jdbc-metastore-migrate
-	python3 scripts/trino_query.py --server "$(TRINO_URL)" --file trino/sql/bootstrap_demo_seed.sql
-	python3 scripts/trino_query.py --server "$(TRINO_URL)" --file trino/sql/bootstrap_lakehouse.sql
+	$(call run-trino-file,trino/sql/bootstrap_demo_seed.sql)
+	$(call run-trino-file,trino/sql/bootstrap_lakehouse.sql)
 
 trino-sync-lakehouse: ## [A]  Incrementally sync Postgres landing data into Iceberg tables on MinIO
-	python3 scripts/trino_query.py --server "$(TRINO_URL)" --file trino/sql/incremental_sync_lakehouse.sql
+	$(call run-trino-file,trino/sql/incremental_sync_lakehouse.sql)
 
 trino-sample-queries: ## [A]  Run sample Trino SQL against the lakehouse catalogs
-	python3 scripts/trino_query.py --server "$(TRINO_URL)" --file trino/sql/sample_queries.sql
+	$(call run-trino-file,trino/sql/sample_queries.sql)
 
 iceberg-streaming-smoke: ## [A]  Verify Kafka events reached lakehouse.streaming Iceberg tables
 	TRINO_URL="$(TRINO_URL)" ./scripts/check-iceberg-streaming.sh
@@ -197,26 +232,26 @@ airflow-dbt-check-dev: ## [B]  Validate Airflow deployment and dbt bootstrap job
 	kubectl -n realtime-dev logs job/realtime-dev-realtime-app-dbt --tail=60 || true
 
 docker-build: ## [B]  Build producer + processor Docker images
-	docker build -t "$(PRODUCER_IMAGE)"  ./producer
-	docker build -t "$(PROCESSOR_IMAGE)" ./processor
-	docker build -t "$(CONNECT_IMAGE)" ./connect
-	docker build -t "$(DBT_IMAGE)" ./analytics/dbt
-	docker build -t "$(AIRFLOW_IMAGE)" ./airflow
-	docker build -t "$(MDM_WRITER_IMAGE)" ./mdm-writer
-	docker build -t "$(MDM_CDC_PRODUCER_IMAGE)" ./mdm-cdc-producer
-	docker build -t "$(MDM_PYSPARK_SYNC_IMAGE)" ./mdm-pyspark-sync
-	docker build -t "$(ICEBERG_WRITER_IMAGE)" ./iceberg-writer
+	$(call build-image,PRODUCER_IMAGE,./producer)
+	$(call build-image,PROCESSOR_IMAGE,./processor)
+	$(call build-image,CONNECT_IMAGE,./connect)
+	$(call build-image,DBT_IMAGE,./analytics/dbt)
+	$(call build-image,AIRFLOW_IMAGE,./airflow)
+	$(call build-image,MDM_WRITER_IMAGE,./mdm-writer)
+	$(call build-image,MDM_CDC_PRODUCER_IMAGE,./mdm-cdc-producer)
+	$(call build-image,MDM_PYSPARK_SYNC_IMAGE,./mdm-pyspark-sync)
+	$(call build-image,ICEBERG_WRITER_IMAGE,./iceberg-writer)
 
 kind-load: ## [B]  Load images into the kind cluster
-	kind load docker-image --name "$(CLUSTER_NAME)" "$(PRODUCER_IMAGE)"
-	kind load docker-image --name "$(CLUSTER_NAME)" "$(PROCESSOR_IMAGE)"
-	kind load docker-image --name "$(CLUSTER_NAME)" "$(CONNECT_IMAGE)"
-	kind load docker-image --name "$(CLUSTER_NAME)" "$(DBT_IMAGE)"
-	kind load docker-image --name "$(CLUSTER_NAME)" "$(AIRFLOW_IMAGE)"
-	kind load docker-image --name "$(CLUSTER_NAME)" "$(MDM_WRITER_IMAGE)"
-	kind load docker-image --name "$(CLUSTER_NAME)" "$(MDM_CDC_PRODUCER_IMAGE)"
-	kind load docker-image --name "$(CLUSTER_NAME)" "$(MDM_PYSPARK_SYNC_IMAGE)"
-	kind load docker-image --name "$(CLUSTER_NAME)" "$(ICEBERG_WRITER_IMAGE)"
+	$(call kind-load-image,PRODUCER_IMAGE)
+	$(call kind-load-image,PROCESSOR_IMAGE)
+	$(call kind-load-image,CONNECT_IMAGE)
+	$(call kind-load-image,DBT_IMAGE)
+	$(call kind-load-image,AIRFLOW_IMAGE)
+	$(call kind-load-image,MDM_WRITER_IMAGE)
+	$(call kind-load-image,MDM_CDC_PRODUCER_IMAGE)
+	$(call kind-load-image,MDM_PYSPARK_SYNC_IMAGE)
+	$(call kind-load-image,ICEBERG_WRITER_IMAGE)
 
 images: docker-build kind-load ## [B]  Build images and load into kind  [scripts/build-images.sh]
 
