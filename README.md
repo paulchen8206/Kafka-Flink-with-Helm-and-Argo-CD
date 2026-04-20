@@ -594,6 +594,10 @@ Runtime validation (Routine A — Docker Compose):
 - Airflow UI reachable at `http://localhost:8084` after `make airflow-up`.
 - `make trino-bootstrap-lakehouse` passed after aligning bootstrap SQL with current landing column names.
 - `make trino-sync-lakehouse` currently fails when MERGE keys are duplicated in source rows (known caveat; see runbook troubleshooting).
+- OpenMetadata hardening checks passed after enabling query stats and local schema registry:
+   - `docker compose up -d postgres schema-registry`
+   - `make openmetadata-ingest-postgres` completed with `GetQueries` passed.
+   - `make openmetadata-ingest-kafka` completed with `CheckSchemaRegistry` passed and Kafka workflow `Warnings: 0`.
 
 Runtime validation (Routine B cluster — 2026-04-18):
 

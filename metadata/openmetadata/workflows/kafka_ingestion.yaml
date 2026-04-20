@@ -1,0 +1,31 @@
+source:
+  type: kafka
+  serviceName: kafka-streaming
+  serviceConnection:
+    config:
+      type: Kafka
+      bootstrapServers: kafka:9092
+      schemaRegistryURL: http://schema-registry:8081
+  sourceConfig:
+    config:
+      type: MessagingMetadata
+      topicFilterPattern:
+        includes:
+          - raw_sales_orders
+          - sales_order
+          - sales_order_line_item
+          - customer_sales
+          - mdm_customer
+          - mdm_product
+
+sink:
+  type: metadata-rest
+  config:
+    api_endpoint: http://openmetadata-server:8585/api
+
+workflowConfig:
+  openMetadataServerConfig:
+    hostPort: http://openmetadata-server:8585/api
+    authProvider: openmetadata
+    securityConfig:
+      jwtToken: eyJraWQiOiJHYjM4OWEtOWY3Ni1nZGpzLWE5MmotMDI0MmJrOTQzNTYiLCJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJvcGVuLW1ldGFkYXRhLm9yZyIsInN1YiI6ImFkbWluIiwicm9sZXMiOlsiQWRtaW4iXSwiZW1haWwiOiJhZG1pbkBvcGVuLW1ldGFkYXRhLm9yZyIsImlzQm90IjpmYWxzZSwidG9rZW5UeXBlIjoiT01fVVNFUiIsImlhdCI6MTc3NjcxOTk3MywiZXhwIjoxNzc2NzIzNTczfQ.lq7-zQMsKA3G1eUszvcxv1vJB2cvZjAJNCxVZ1g58I1setm5PHpzBKSQCFXWTKvT119V2Z8Y01Ey81D_fhRbk5tvmXmVJBnFYY8fbhvF0JmpbpyCGG-Lr8Ek-ja__apFL_0Y8aY361codT9rE4WWk9Mt59RBG87ceb4zfY_g4r8K_dR2gM5AlD9V912-HW1THi4r_ny0_VizpXHNouBUaWoSaQQWZRF0_2zoFyXJoUckyOv44mhoo-nLl-AFXF0tmwycLrvHnuuAF3dTdPjNySHVu1ta38bzeXbLXuLXk9kZCRdPjx0UnSD95JUqVBwR0cnyD8zzE8ZASrVd80GplQ

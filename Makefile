@@ -26,6 +26,8 @@ PHONY_ROUTINE_A := \
 	routine-a routine-a-ops up down topics-create topics-list topics-check consume \
 	lakehouse-up lakehouse-down jdbc-metastore-migrate airflow-up airflow-logs \
 	airflow-trigger-dbt-dag airflow-dbt-reboot airflow-dbt-check kafka-ui-up dbt-stop ops-status routine-a-observe \
+	openmetadata-up openmetadata-down openmetadata-status openmetadata-ingest-trino openmetadata-ingest-postgres \
+	openmetadata-ingest-dbt openmetadata-ingest-airflow openmetadata-ingest-kafka openmetadata-prepare-dbt-artifacts \
 	mdm-up mdm-topics-check dbt-run verify-warehouse verify-dbt-relations \
 	trino-smoke trino-query trino-shell trino-seed-demo trino-bootstrap-lakehouse \
 	trino-rebuild-lakehouse trino-sync-lakehouse trino-sample-queries \
@@ -150,6 +152,7 @@ ops-status: ## [A]  Show key runtime status for kafka-ui, airflow, and dbt
 	@curl -fsS http://localhost:9090/-/ready >/dev/null && echo "prometheus: healthy" || echo "prometheus: unavailable"
 	@curl -fsS http://localhost:9115/metrics >/dev/null && echo "blackbox-exporter: healthy" || echo "blackbox-exporter: unavailable"
 	@curl -fsS http://localhost:3000/api/health >/dev/null && echo "grafana: healthy" || echo "grafana: unavailable"
+	@curl -fsS http://localhost:8585 >/dev/null && echo "openmetadata: healthy" || echo "openmetadata: unavailable"
 
 routine-a-observe: ## [A]  Run full Docker observability sweep (ops-status + airflow/dbt check + trino smoke)
 	$(MAKE) ops-status
@@ -159,6 +162,37 @@ routine-a-observe: ## [A]  Run full Docker observability sweep (ops-status + air
 airflow-dbt-check: ## [A]  Validate Airflow + dbt runtime status/logs in Docker Compose
 	docker compose ps -a airflow dbt
 	docker compose logs --tail=60 airflow dbt || true
+
+openmetadata-up: ## [A]  Start OpenMetadata catalog services (profile: openmetadata)
+	docker compose --profile openmetadata up -d openmetadata-db openmetadata-search openmetadata-server openmetadata-ingestion
+
+openmetadata-down: ## [A]  Stop OpenMetadata catalog services
+	docker compose --profile openmetadata stop openmetadata-ingestion openmetadata-server openmetadata-search openmetadata-db
+
+openmetadata-status: ## [A]  Show OpenMetadata service status and health check
+	docker compose --profile openmetadata ps openmetadata-db openmetadata-search openmetadata-server openmetadata-ingestion
+	@curl -fsS http://localhost:8585 >/dev/null && echo "openmetadata: healthy" || echo "openmetadata: unavailable"
+
+openmetadata-ingest-trino: ## [A]  Run OpenMetadata Trino metadata ingestion workflow
+	docker compose --profile openmetadata exec -T openmetadata-ingestion metadata ingest -c /opt/openmetadata/metadata/workflows/trino_ingestion.yaml
+
+openmetadata-ingest-postgres: ## [A]  Run OpenMetadata Postgres metadata ingestion workflow
+	docker compose exec -T postgres psql -U analytics -d analytics -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+	docker compose --profile openmetadata exec -T openmetadata-ingestion metadata ingest -c /opt/openmetadata/metadata/workflows/postgres_ingestion.yaml
+
+openmetadata-prepare-dbt-artifacts: ## [A]  Create parser-compatible dbt manifest for OpenMetadata ingestion
+	python3 -c 'import json,pathlib,shutil; base=pathlib.Path("analytics/dbt/target"); m=json.loads((base/"manifest.json").read_text()); m.get("metadata",{}).pop("invocation_started_at",None); m.get("metadata",{}).pop("quoting",None); m.get("metadata",{}).pop("run_started_at",None); m.pop("functions",None); rr=json.loads((base/"run_results.json").read_text()); rr.get("metadata",{}).pop("invocation_started_at",None); out=base/"openmetadata"; out.mkdir(parents=True, exist_ok=True); (out/"manifest.json").write_text(json.dumps(m)); (out/"run_results.json").write_text(json.dumps(rr)); c=base/"catalog.json"; (shutil.copy2(c, out/"catalog.json") if c.exists() else None)'
+
+openmetadata-ingest-dbt: ## [A]  Run OpenMetadata dbt metadata and lineage ingestion workflow
+	$(MAKE) openmetadata-ingest-trino
+	$(MAKE) openmetadata-prepare-dbt-artifacts
+	docker compose --profile openmetadata exec -T openmetadata-ingestion metadata ingest -c /opt/openmetadata/metadata/workflows/dbt_ingestion.yaml
+
+openmetadata-ingest-airflow: ## [A]  Run OpenMetadata Airflow pipeline ingestion workflow
+	docker compose --profile openmetadata exec -T openmetadata-ingestion metadata ingest -c /opt/openmetadata/metadata/workflows/airflow_ingestion.yaml
+
+openmetadata-ingest-kafka: ## [A]  Run OpenMetadata Kafka topic ingestion workflow
+	docker compose --profile openmetadata exec -T openmetadata-ingestion metadata ingest -c /opt/openmetadata/metadata/workflows/kafka_ingestion.yaml
 
 mdm-up: ## [A]  Start MDM CDC pipeline services
 	docker compose up -d mysql-mdm mdm-writer mdm-connect mdm-connect-init mdm-cdc-producer

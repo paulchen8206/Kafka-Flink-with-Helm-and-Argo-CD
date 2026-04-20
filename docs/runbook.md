@@ -266,6 +266,28 @@ Check Trino coordinator health:
 make trino-smoke
 ```
 
+OpenMetadata hardening validation (Postgres query stats + Kafka schema registry):
+
+```bash
+docker compose up -d postgres schema-registry
+make openmetadata-ingest-postgres
+make openmetadata-ingest-kafka
+```
+
+Optional explicit checks:
+
+```bash
+docker compose exec -T postgres psql -U analytics -d analytics -c "SELECT extname FROM pg_extension WHERE extname = 'pg_stat_statements';"
+docker compose --profile openmetadata exec -T openmetadata-ingestion metadata ingest -c /opt/openmetadata/metadata/workflows/postgres_ingestion.yaml | grep -E "GetQueries|passed=True"
+docker compose --profile openmetadata exec -T openmetadata-ingestion metadata ingest -c /opt/openmetadata/metadata/workflows/kafka_ingestion.yaml | grep -E "CheckSchemaRegistry|Warnings:"
+```
+
+Expected results:
+
+- Postgres test connection includes `GetQueries` as passed.
+- Kafka test connection includes `CheckSchemaRegistry` as passed.
+- Kafka workflow summary shows `Warnings: 0` for the Kafka ingestion workflow.
+
 Open a shell-based Trino CLI or run ad hoc SQL without calling Python directly:
 
 ```bash

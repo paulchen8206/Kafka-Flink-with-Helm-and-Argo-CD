@@ -46,6 +46,17 @@ services:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
 
+  schema-registry:
+    image: python:3.11-alpine
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    command: ["python", "/app/mock_schema_registry.py"]
+    volumes:
+      - ./scripts/mock_schema_registry.py:/app/mock_schema_registry.py:ro
+
   producer:
     build:
       context: ./producer
@@ -132,6 +143,12 @@ services:
 
   postgres:
     image: postgres:16
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
     ports:
       - "5432:5432"
     environment:
@@ -371,6 +388,65 @@ services:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
 
+  openmetadata-db:
+    image: mysql:8.4
+    profiles: ["openmetadata"]
+    environment:
+      MYSQL_ROOT_PASSWORD: openmetadata_root
+      MYSQL_DATABASE: openmetadata_db
+      MYSQL_USER: openmetadata_user
+      MYSQL_PASSWORD: openmetadata_pass
+    ports:
+      - "3307:3306"
+    volumes:
+      - openmetadata-db-data:/var/lib/mysql
+
+  openmetadata-search:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    profiles: ["openmetadata"]
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+    ports:
+      - "9200:9200"
+    volumes:
+      - openmetadata-es-data:/usr/share/elasticsearch/data
+
+  openmetadata-server:
+    image: openmetadata/server:1.5.8
+    profiles: ["openmetadata"]
+    depends_on:
+      - openmetadata-db
+      - openmetadata-search
+    environment:
+      OPENMETADATA_CLUSTER_NAME: local
+      SERVER_HOST_API_URL: http://openmetadata-server:8585/api
+      DB_DRIVER_CLASS: com.mysql.cj.jdbc.Driver
+      DB_SCHEME: mysql
+      DB_USE_SSL: "false"
+      DB_HOST: openmetadata-db
+      DB_PORT: "3306"
+      OM_DATABASE: openmetadata_db
+      DB_USER: openmetadata_user
+      DB_USER_PASSWORD: openmetadata_pass
+      ELASTICSEARCH_HOST: openmetadata-search
+      ELASTICSEARCH_PORT: "9200"
+      ELASTICSEARCH_SCHEME: http
+    ports:
+      - "8585:8585"
+
+  openmetadata-ingestion:
+    image: openmetadata/ingestion:1.5.8
+    profiles: ["openmetadata"]
+    depends_on:
+      - openmetadata-server
+    entrypoint: ["/bin/bash", "-lc", "sleep infinity"]
+    volumes:
+      - ./metadata/openmetadata:/opt/openmetadata/metadata
+      - ./analytics/dbt:/opt/openmetadata/metadata/analytics/dbt:ro
+      - airflow-data:/opt/airflow:ro
+
 volumes:
   airflow-data:
   minio-data:
@@ -378,3 +454,5 @@ volumes:
   mysql-mdm-data:
   prometheus-data:
   grafana-data:
+  openmetadata-db-data:
+  openmetadata-es-data:
