@@ -1,33 +1,26 @@
 # Full Stack Modern Data Architecture and Engineering
 
-This repository demonstrates a modern data platform that combines realtime processing, lakehouse storage, ELT modeling, and GitOps delivery.
+A reference implementation of a production-grade modern data platform covering realtime event streaming, CDC-driven MDM, a lakehouse on object storage, medallion ELT modeling, workflow orchestration, and GitOps delivery — all runnable locally with two operating modes:
 
-It supports two local operating modes:
+- **Routine A** — Docker Compose for fast development loops.
+- **Routine B** — kind + Helm + Argo CD for Kubernetes and GitOps workflow simulation.
 
-- Docker Compose for fast development loops.
-- kind plus Helm plus Argo CD for Kubernetes and GitOps workflow simulation.
+## Table of Contents
 
-## Purpose
-
-Provide a single project entrypoint for architecture, operations, and migration guidance.
-
-## Commands
-
-Use the Quick Start command blocks in this file for Routine A (Compose) and Routine B (kind plus Helm plus Argo CD).
-
-## Validation
-
-Use the Data Validation and Validation Snapshot sections in this file to confirm expected runtime behavior.
-
-## Troubleshooting
-
-Use the troubleshooting guidance in this file first, then use the runbook for routine-specific operational diagnostics.
-
-## References
-
-- [docs/architecture.md](docs/architecture.md)
-- [docs/runbook.md](docs/runbook.md)
-- [docs/adr/README.md](docs/adr/README.md)
+- [What This Project Demonstrates](#what-this-project-demonstrates)
+- [End-to-End Flow](#end-to-end-flow-high-level)
+- [Repository Layout](#repository-layout)
+- [Quick Start — Option A: Docker Compose](#option-a-docker-compose)
+- [Quick Start — Option B: kind + Helm + Argo CD](#option-b-kind--helm--argo-cd)
+- [Environment Strategy](#environment-strategy)
+- [Configuration](#configuration)
+- [Data Validation](#data-validation)
+- [Validation Snapshot](#validation-snapshot-2026-04-20)
+- [Complete Tooling Inventory](#complete-tooling-inventory)
+- [Lakehouse/Warehouse Target Options](#lakehousewarehouse-target-options)
+- [Build Commands](#build-commands)
+- [Documentation Map](#documentation-map)
+- [Notes](#notes)
 
 ## What This Project Demonstrates
 
@@ -78,9 +71,11 @@ Current implementation note:
 
 Object storage counterpart by cloud:
 
-- AWS: Amazon S3
-- GCP: Google Cloud Storage
-- Azure: Azure Data Lake Storage Gen2
+| Cloud | Object storage |
+| --- | --- |
+| AWS | Amazon S3 |
+| GCP | Google Cloud Storage |
+| Azure | Azure Data Lake Storage Gen2 |
 
 For full migration detail and workflow, see [docs/architecture.md](docs/architecture.md).
 
@@ -91,11 +86,11 @@ For full migration detail and workflow, see [docs/architecture.md](docs/architec
 
 ## End-to-End Flow (High Level)
 
-1. Python producer publishes composite sales events to raw_sales_orders.
-2. Java/Flink processor consumes and fans out into sales_order, sales_order_line_item, and customer_sales topics.
+1. Python producer publishes composite sales events to `raw_sales_orders`.
+2. Java/Flink processor consumes and fans out into `sales_order`, `sales_order_line_item`, and `customer_sales` topics.
 3. Kafka Connect sinks these topics to raw JSON objects on MinIO and Postgres landing tables.
 4. MDM writer updates MySQL customer and product master records.
-5. Debezium captures MDM CDC; CDC publisher emits curated mdm_customer and mdm_product topics.
+5. Debezium captures MDM CDC; CDC publisher emits curated `mdm_customer` and `mdm_product` topics.
 6. PySpark sync moves MDM tables into Postgres landing.
 7. dbt builds bronze, silver, and gold analytics models.
 8. Trino can bootstrap and query real Iceberg tables on MinIO from the Postgres `landing` layer.
@@ -104,9 +99,11 @@ For full migration detail and workflow, see [docs/architecture.md](docs/architec
 
 ## Documentation Map
 
-- Architecture reference: [docs/architecture.md](docs/architecture.md)
-- Operations runbook: [docs/runbook.md](docs/runbook.md)
-- Architecture Decision Records (ADR): [docs/adr/README.md](docs/adr/README.md)
+| Document | Purpose |
+| --- | --- |
+| [docs/architecture.md](docs/architecture.md) | Architecture diagrams and modern data engineering framework/patterns |
+| [docs/runbook.md](docs/runbook.md) | Day-2 operations procedures for Compose and Argo CD workflows |
+| [docs/adr/README.md](docs/adr/README.md) | Architecture Decision Records (ADRs) |
 
 ## Complete Tooling Inventory
 
@@ -208,7 +205,7 @@ Start lakehouse and warehouse layer:
 make lakehouse-up
 ```
 
-If you bypass `make`, use `./scripts/compose-up.sh ...` instead of raw `docker compose up ...` so the Postgres-backed Iceberg JDBC metastore upgrade is enforced automatically before Trino and `iceberg-writer` continue.
+> If you bypass `make`, use `./scripts/compose-up.sh ...` instead of raw `docker compose up ...` so the Postgres-backed Iceberg JDBC metastore upgrade is enforced automatically before Trino and `iceberg-writer` continue.
 
 Run dbt manually:
 
@@ -237,29 +234,33 @@ make validate
 
 Operational helpers:
 
-- `make kafka-ui-up`
-- `make dbt-stop`
-- `make mdm-up`
-- `make mdm-topics-check`
-- `make airflow-dbt-reboot`
-- `make openmetadata-up`
-- `make openmetadata-status`
-- `make openmetadata-ingest-kafka`
-- `make ops-status`
+| Target | Purpose |
+| --- | --- |
+| `make kafka-ui-up` | Start Kafka UI |
+| `make dbt-stop` | Stop the dbt service |
+| `make mdm-up` | Start MDM services |
+| `make mdm-topics-check` | Validate MDM topic consumption |
+| `make airflow-dbt-reboot` | Restart Airflow and dbt |
+| `make openmetadata-up` | Start OpenMetadata |
+| `make openmetadata-status` | Check OpenMetadata pipeline status |
+| `make openmetadata-ingest-kafka` | Run Kafka metadata ingestion |
+| `make ops-status` | Show overall service health |
 
 Key local endpoints:
 
-- Kafka is exposed on `localhost:9094`
-- Kafka UI is exposed on `http://localhost:8080`
-- MinIO API: `http://localhost:9000`
-- MinIO Console: `http://localhost:9001`
-- Kafka Connect REST: `http://localhost:8083`
-- Trino coordinator: `http://localhost:8086`
-- Debezium Connect REST (MDM): `http://localhost:8085`
-- Airflow UI: `http://localhost:8084`
-- OpenMetadata UI/API: `http://localhost:8585`
-- Postgres: `localhost:5432` (user/password/db: `analytics`)
-- MySQL MDM: `localhost:3306` (root password: `mdmroot`, db: `mdm`)
+| Service | Endpoint |
+| --- | --- |
+| Kafka | `localhost:9094` |
+| Kafka UI | `http://localhost:8080` |
+| MinIO API | `http://localhost:9000` |
+| MinIO Console | `http://localhost:9001` |
+| Kafka Connect REST | `http://localhost:8083` |
+| Debezium Connect REST (MDM) | `http://localhost:8085` |
+| Trino coordinator | `http://localhost:8086` |
+| Airflow UI | `http://localhost:8084` |
+| OpenMetadata UI/API | `http://localhost:8585` |
+| Postgres | `localhost:5432` (user/password/db: `analytics`) |
+| MySQL MDM | `localhost:3306` (root password: `mdmroot`, db: `mdm`) |
 
 Quick Trino health check:
 
@@ -278,10 +279,7 @@ make trino-sample-queries
 make iceberg-streaming-smoke
 ```
 
-Local Airflow credentials:
-
-- Username: `admin`
-- Password: `admin`
+Local Airflow credentials: username `admin` / password `admin`.
 
 Expected container behavior:
 
@@ -397,20 +395,16 @@ Recommended command order (matches the runbook):
    kubectl -n realtime-dev port-forward svc/realtime-dev-realtime-app-postgres 5433:5432
    ```
 
-   - Argo CD URL: `https://localhost:8443`
-   - Argo CD username: `admin`
-   - Argo CD password command:
-
-   ```bash
-   kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 --decode; echo
-   ```
-
-   - Kafka UI URL: `http://localhost:8082`
-   - Grafana URL: `http://localhost:3001`
-   - Airflow URL: `http://localhost:8084` (user/password: `admin` / `admin`)
-   - MinIO Console URL: `http://localhost:9001` (user: `minio`, password: `minio123`)
-   - Trino coordinator URL: `http://localhost:8086`
-   - Postgres: host `127.0.0.1`, port `5433`, user `analytics`, password `analytics`, db `analytics`
+   | Service | URL / Connection |
+   | --- | --- |
+   | Argo CD | `https://localhost:8443` (username: `admin`) |
+   | Argo CD password | `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 --decode; echo` |
+   | Kafka UI | `http://localhost:8082` |
+   | Grafana | `http://localhost:3001` |
+   | Airflow | `http://localhost:8084` (user/password: `admin` / `admin`) |
+   | MinIO Console | `http://localhost:9001` (user: `minio`, password: `minio123`) |
+   | Trino | `http://localhost:8086` |
+   | Postgres | host `127.0.0.1`, port `5433`, user `analytics`, password `analytics`, db `analytics` |
 
 Dev environment behavior:
 
@@ -421,9 +415,11 @@ Dev environment behavior:
 
 ## Environment Strategy
 
-- `dev`: Local kind deployment with in-cluster Kafka from the Helm dependency.
-- `qa`: GitOps deployment against a shared Kafka bootstrap service and registry-hosted images.
-- `prd`: Same logical topology as `qa` with higher replica counts and faster Flink checkpoints.
+| Environment | Description |
+| --- | --- |
+| `dev` | Local kind deployment with in-cluster Kafka from the Helm dependency. |
+| `qa` | GitOps deployment against a shared Kafka bootstrap service and registry-hosted images. |
+| `prd` | Same logical topology as `qa` with higher replica counts and faster Flink checkpoints. |
 
 ## Configuration
 
@@ -457,13 +453,14 @@ Dev environment behavior:
 - The repository includes a repeatable SQL runner: `python3 scripts/trino_query.py --server http://localhost:8086 --file <sql-file>`
 - The repository also includes a shell helper for ad hoc SQL without calling Python directly: `./scripts/trino-sql.sh "SHOW TABLES FROM lakehouse.streaming"`
 - `make trino-shell` opens the Trino CLI inside the Compose service, or runs a SQL file when `SQL_FILE=<path>` is provided
-- Real Iceberg tables can be materialized immediately from Postgres landing data with `make trino-bootstrap-lakehouse`
-- All demo Iceberg tables can be dropped and recreated with `make trino-rebuild-lakehouse`
-- Incremental refresh from Postgres landing is available with `make trino-sync-lakehouse`
-- Demo seed tables can be created with `make trino-seed-demo`
-- End-to-end verification for the direct writer path is available with `make iceberg-streaming-smoke`
-- Kubernetes-side verification through a temporary Trino port-forward is available with `make iceberg-streaming-smoke-dev`
-- The Kafka Connect MinIO path still writes raw JSON files, but a direct Kafka-to-Iceberg path is also available through `iceberg-writer`.
+| Make target | Action |
+| --- | --- |
+| `make trino-bootstrap-lakehouse` | Materialize real Iceberg tables from Postgres landing |
+| `make trino-rebuild-lakehouse` | Drop and recreate all demo Iceberg tables |
+| `make trino-sync-lakehouse` | Incremental refresh from Postgres landing |
+| `make trino-seed-demo` | Create demo seed tables |
+| `make iceberg-streaming-smoke` | End-to-end verification for the direct writer path |
+| `make iceberg-streaming-smoke-dev` | Kubernetes-side verification via temporary Trino port-forward |
 
 Example Trino workflow:
 
@@ -520,10 +517,14 @@ SELECT * FROM lakehouse.demo.sample_orders LIMIT 10;
 
 - dbt project location: `analytics/dbt`
 - The dbt model structure is portable to Redshift, Snowflake, BigQuery, and Databricks by switching adapter/profile configuration.
-- Source schema: `landing`
-- Bronze schema: `bronze` (views)
-- Silver schema: `silver` (tables)
-- Gold schema: `gold` (tables)
+
+| Layer | Schema | Materialization |
+| --- | --- | --- |
+| Source | `landing` | — |
+| Bronze | `bronze` | views |
+| Silver | `silver` | tables |
+| Gold | `gold` | tables |
+
 - `analytics/dbt/macros/generate_schema_name.sql` disables dbt's default `target_schema + custom_schema` concatenation, so models materialize directly in `bronze`, `silver`, and `gold`.
 - In the Helm path, the same macro must be mounted into the dbt runtime (`/dbt/macros/generate_schema_name.sql`) from the warehouse ConfigMap; otherwise dbt may recreate `public_bronze`, `public_silver`, and `public_gold`.
 - Main gold model: `gold_customer_sales_summary`
@@ -558,19 +559,19 @@ List dbt-created relations and materializations:
 make verify-dbt-relations
 ```
 
-If you need to rerun dbt manually:
+Rerun dbt manually if needed:
 
 ```bash
 make dbt-run
 ```
 
-If you want to trigger the scheduled Airflow DAG immediately:
+Trigger the scheduled Airflow DAG immediately:
 
 ```bash
 make airflow-trigger-dbt-dag
 ```
 
-`make dbt-run` uses `docker compose run --rm dbt`, so Compose may briefly wait on dependencies before the dbt command starts.
+> `make dbt-run` uses `docker compose run --rm dbt`, so Compose may briefly wait on dependencies before the dbt command starts.
 
 ## Validation Snapshot (2026-04-20)
 
